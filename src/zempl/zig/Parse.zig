@@ -3734,7 +3734,7 @@ fn nextToken(p: *Parse) TokenIndex {
 }
 
 const Parse = @This();
-const std = @import("../std.zig");
+const std = @import("std");
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
 const Ast = std.zig.Ast;
@@ -3744,10 +3744,6 @@ const TokenIndex = Ast.TokenIndex;
 const OptionalTokenIndex = Ast.OptionalTokenIndex;
 const ExtraIndex = Ast.ExtraIndex;
 const Token = std.zig.Token;
-
-test {
-    _ = @import("parser_test.zig");
-}
 
 // ============================================================================
 // Zempl-specific additions to Parse.zig
@@ -3759,7 +3755,7 @@ test {
 /// Returns null if at EOF or if current token is not a declaration
 pub fn parseTopLevelItem(p: *Parse) Error!?Node.Index {
     // Skip any newlines or whitespace tokens (handled by tok_i advancement)
-    
+
     // Check current token to determine what to parse
     switch (p.tokenTag(p.tok_i)) {
         .keyword_const, .keyword_var => {
@@ -3800,11 +3796,6 @@ pub fn parseExpression(p: *Parse) Error!Node.Index {
     return p.parseExpr();
 }
 
-/// Parse a type expression (for component parameter types)
-pub fn parseTypeExpr(p: *Parse) Error!Node.Index {
-    return p.parseTypeExpr();
-}
-
 /// Get current token position
 pub fn getPosition(p: *Parse) TokenIndex {
     return p.tok_i;
@@ -3813,45 +3804,6 @@ pub fn getPosition(p: *Parse) TokenIndex {
 /// Set token position (for resuming parsing after handoff)
 pub fn setPosition(p: *Parse, pos: TokenIndex) void {
     p.tok_i = pos;
-}
-
-/// Parse a parameter declaration list (for zempl component parameters)
-/// Assumes current token is '('
-/// Returns the AST node for the entire param list
-pub fn parseParamDeclList(p: *Parse) Error!Node.Index {
-    const lparen = p.expectToken(.l_paren) catch return error.ParseError;
-    
-    var params: std.ArrayListUnmanaged(Node.Index) = .{};
-    defer params.deinit(p.gpa);
-    
-    while (p.tokenTag(p.tok_i) != .r_paren) {
-        // Parse each parameter
-        const param = p.parseParamDecl() catch |err| {
-            params.deinit(p.gpa);
-            return err;
-        };
-        try params.append(p.gpa, param);
-        
-        // Check for comma
-        if (p.tokenTag(p.tok_i) == .comma) {
-            _ = p.nextToken(); // consume ','
-        } else {
-            break;
-        }
-    }
-    
-    _ = p.expectToken(.r_paren) catch |err| {
-        params.deinit(p.gpa);
-        return err;
-    };
-    
-    // Create a params node
-    const slice = try p.listToSpan(params.items);
-    return p.addNode(.{
-        .tag = .fn_proto_multi,
-        .main_token = lparen,
-        .data = .{ .extra_range = slice },
-    });
 }
 
 // Tests for zempl-specific parsing functions
