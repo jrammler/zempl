@@ -18,10 +18,8 @@ pub const Token = enum {
 
     // HTML tokens
     langle, // <
-    langle_slash, // </
     rangle, // >
-    slash_rangle, // />
-    slash, // / (used in various contexts)
+    slash, // / (used in end tags </ and self-closing />)
     equal, // =
 };
 
@@ -177,12 +175,6 @@ pub const Lexer = struct {
 
         // Check for HTML tokens
         if (c == '<') {
-            // Check for </ (end tag)
-            if (self.peekCharAhead(1) == '/') {
-                _ = self.advance(); // consume '<'
-                _ = self.advance(); // consume '/'
-                return TokenWithLocation.init(.langle_slash, start, self.index, self.source[start..self.index]);
-            }
             _ = self.advance();
             return TokenWithLocation.init(.langle, start, self.index, "<");
         }
@@ -193,12 +185,6 @@ pub const Lexer = struct {
         }
 
         if (c == '/') {
-            // Check for /> (self-closing tag)
-            if (self.peekCharAhead(1) == '>') {
-                _ = self.advance(); // consume '/'
-                _ = self.advance(); // consume '>'
-                return TokenWithLocation.init(.slash_rangle, start, self.index, self.source[start..self.index]);
-            }
             _ = self.advance();
             return TokenWithLocation.init(.slash, start, self.index, "/");
         }
@@ -255,12 +241,6 @@ pub const Lexer = struct {
 
         // If we're at a special character, return it as a token
         if (c == '<') {
-            // Check for </
-            if (self.peekCharAhead(1) == '/') {
-                _ = self.advance(); // consume '<'
-                _ = self.advance(); // consume '/'
-                return TokenWithLocation.init(.langle_slash, start, self.index, self.source[start..self.index]);
-            }
             _ = self.advance();
             return TokenWithLocation.init(.langle, start, self.index, "<");
         }
@@ -354,26 +334,38 @@ test "HTML tokens" {
     try std.testing.expectEqual(Token.slash, token.token);
 }
 
-test "End tag token" {
+test "End tag tokens" {
     const source = "</div>";
     var lexer = Lexer.init(source);
 
     var token = lexer.next();
-    try std.testing.expectEqual(Token.langle_slash, token.token);
-    try std.testing.expectEqualStrings("</", token.text);
+    try std.testing.expectEqual(Token.langle, token.token);
+    try std.testing.expectEqualStrings("<", token.text);
+
+    token = lexer.next();
+    try std.testing.expectEqual(Token.slash, token.token);
+    try std.testing.expectEqualStrings("/", token.text);
 
     token = lexer.next();
     try std.testing.expectEqual(Token.identifier, token.token);
     try std.testing.expectEqualStrings("div", token.text);
+
+    token = lexer.next();
+    try std.testing.expectEqual(Token.rangle, token.token);
+    try std.testing.expectEqualStrings(">", token.text);
 }
 
-test "Self-closing tag token" {
+test "Slash token" {
     const source = "/>";
     var lexer = Lexer.init(source);
 
-    const token = lexer.next();
-    try std.testing.expectEqual(Token.slash_rangle, token.token);
-    try std.testing.expectEqualStrings("/>", token.text);
+    var token = lexer.next();
+    try std.testing.expectEqual(Token.slash, token.token);
+    try std.testing.expectEqualStrings("/", token.text);
+
+    token = lexer.next();
+    try std.testing.expectEqual(Token.rangle, token.token);
+    try std.testing.expectEqualStrings(">", token.text);
 }
 
 test "Zempl braces" {

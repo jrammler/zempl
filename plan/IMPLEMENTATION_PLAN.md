@@ -50,7 +50,7 @@ Zempl transforms `.zempl` files into `.zig` files. The implementation is divided
   - `eof`, `identifier`, `text` ✓
   - Zempl-specific: `zempl_keyword`, `at_lbrace` (for `@{`), `lbrace`, `rbrace` ✓
   - Identifiers can start with `@` (e.g., `@if`, `@Component`) ✓
-  - HTML: `langle`, `rangle`, `slash`, `equal`, `langle_slash`, `slash_rangle` ✓
+  - HTML: `langle`, `rangle`, `slash`, `equal` ✓ (Note: `</` and `/>` are separate `<` `/` `>` tokens, not compound)
   - Note: No standalone `@` token - `@` is always part of an identifier ✓
   - Note: No `string_literal` or `number` - those are handled by expression parser ✓
 
@@ -77,7 +77,8 @@ Zempl transforms `.zempl` files into `.zig` files. The implementation is divided
 - Handle `{` and `}` for expression interpolation ✓
 
 ### Task 2.5: HTML Tokenization ✓
-- Handle `<`, `</`, `>`, `/>` as distinct tokens ✓
+- Handle `<`, `>`, `/`, `=` as distinct tokens ✓
+- Parser will recognize `</` (langle + slash) and `/>` (slash + rangle) sequences ✓
 - Handle attribute names as identifiers ✓
 - Handle `=` for attributes ✓
 - Handle void elements as identifiers ✓
