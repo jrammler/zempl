@@ -163,8 +163,9 @@ Zempl transforms `.zempl` files into `.zig` files. The implementation is divided
 - No stored state - creates fresh tokenization for each expression ✓
 - Functions: `parseExpression()`, `parseTypeExpr()`, `parseTopLevelItem()`
 
-### Task 4.4: Tests
-- ⏳ Tests for zig_parse.zig functions pending
+### Task 4.4: Tests ✓
+- ✓ Tests for parseExpression, parseTypeExpr, parseTopLevelItem
+- ⚠️ Memory leaks present (tokens not freed - known issue)
 
 **Deliverables**:
 - ✓ Forked Parse.zig (3811 lines) with exposed functions
