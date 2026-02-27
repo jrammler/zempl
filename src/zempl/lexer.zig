@@ -124,9 +124,9 @@ pub const Lexer = struct {
         return std.ascii.isAlphabetic(ch) or ch == '_' or ch == '@';
     }
 
-    /// Check if character is valid identifier continuation (alphanumeric or underscore)
+    /// Check if character is valid identifier continuation (alphanumeric, underscore, or dash)
     fn isIdentifierPart(ch: u8) bool {
-        return std.ascii.isAlphanumeric(ch) or ch == '_';
+        return std.ascii.isAlphanumeric(ch) or ch == '_' or ch == '-';
     }
 
     /// Scan an identifier
@@ -489,12 +489,12 @@ test "Complex zempl snippet" {
 test "Invalid token" {
     const source = "div $";
     var lexer = Lexer.init(source, "test.zempl");
-    
+
     // First token is valid identifier
     var token = lexer.next();
     try std.testing.expectEqual(TokenType.identifier, token.token_type);
     try std.testing.expectEqualStrings("div", token.text);
-    
+
     // Second token is invalid (the $ character)
     token = lexer.next();
     try std.testing.expectEqual(TokenType.invalid, token.token_type);
@@ -506,16 +506,40 @@ test "Invalid token" {
 test "Line and column tracking" {
     const source = "div\nspan";
     var lexer = Lexer.init(source, "test.zempl");
-    
+
     var token = lexer.next();
     try std.testing.expectEqual(TokenType.identifier, token.token_type);
     try std.testing.expectEqualStrings("div", token.text);
     try std.testing.expectEqual(@as(usize, 1), token.location.line);
     try std.testing.expectEqual(@as(usize, 1), token.location.column);
-    
+
     token = lexer.next();
     try std.testing.expectEqual(TokenType.identifier, token.token_type);
     try std.testing.expectEqualStrings("span", token.text);
     try std.testing.expectEqual(@as(usize, 2), token.location.line);
     try std.testing.expectEqual(@as(usize, 1), token.location.column);
+}
+
+test "HTML tag with dash" {
+    const source = "<my-custom-element>content</my-custom-element>";
+    var lexer = Lexer.init(source, "test.zempl");
+    
+    var token = lexer.next();
+    try std.testing.expectEqual(TokenType.langle, token.token_type);
+    
+    token = lexer.next();
+    try std.testing.expectEqual(TokenType.identifier, token.token_type);
+    try std.testing.expectEqualStrings("my-custom-element", token.text);
+    
+    token = lexer.next();
+    try std.testing.expectEqual(TokenType.rangle, token.token_type);
+}
+
+test "Attribute with dash" {
+    const source = "data-value";
+    var lexer = Lexer.init(source, "test.zempl");
+    
+    const token = lexer.next();
+    try std.testing.expectEqual(TokenType.identifier, token.token_type);
+    try std.testing.expectEqualStrings("data-value", token.text);
 }
