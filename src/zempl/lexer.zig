@@ -5,6 +5,7 @@ const Location = @import("error.zig").Location;
 pub const TokenType = enum {
     // Special tokens
     eof,
+    invalid, // Unknown/invalid character
 
     // Content tokens
     identifier,
@@ -29,15 +30,10 @@ pub const Token = struct {
     location: Location,
     text: []const u8,
 
-    pub fn init(token_type: TokenType, file_path: []const u8, start: usize, end: usize, text: []const u8) Token {
-        _ = end; // end is currently unused but may be used for location calculation later
+    pub fn init(token_type: TokenType, location: Location, text: []const u8) Token {
         return .{
             .token_type = token_type,
-            .location = .{
-                .file_path = file_path,
-                .line = 0, // TODO: Calculate actual line number
-                .column = start,
-            },
+            .location = location,
             .text = text,
         };
     }
@@ -48,18 +44,31 @@ pub const Lexer = struct {
     source: []const u8,
     file_path: []const u8,
     index: usize,
+    line: usize,
+    column: usize,
 
     pub fn init(source: []const u8, file_path: []const u8) Lexer {
         return .{
             .source = source,
             .file_path = file_path,
             .index = 0,
+            .line = 1,
+            .column = 1,
         };
     }
 
     /// Get current position in source
     pub fn getPosition(self: Lexer) usize {
         return self.index;
+    }
+
+    /// Get current location (line and column)
+    pub fn getLocation(self: Lexer) Location {
+        return .{
+            .file_path = self.file_path,
+            .line = self.line,
+            .column = self.column,
+        };
     }
 
     /// Peek at current character without consuming
@@ -79,13 +88,22 @@ pub const Lexer = struct {
         return self.source[pos];
     }
 
-    /// Consume current character and advance
+    /// Consume current character and advance, tracking line and column
     fn advance(self: *Lexer) ?u8 {
         if (self.index >= self.source.len) {
             return null;
         }
         const ch = self.source[self.index];
         self.index += 1;
+
+        // Update line and column
+        if (ch == '\n') {
+            self.line += 1;
+            self.column = 1;
+        } else {
+            self.column += 1;
+        }
+
         return ch;
     }
 
@@ -113,6 +131,7 @@ pub const Lexer = struct {
 
     /// Scan an identifier
     fn scanIdentifier(self: *Lexer) Token {
+        const location = self.getLocation();
         const start = self.index;
 
         // Consume first character (already validated as identifier start)
@@ -132,14 +151,15 @@ pub const Lexer = struct {
 
         // Check for keywords
         if (std.mem.eql(u8, text, "zempl")) {
-            return Token.init(.zempl_keyword, self.file_path, start, self.index, text);
+            return Token.init(.zempl_keyword, location, text);
         }
 
-        return Token.init(.identifier, self.file_path, start, self.index, text);
+        return Token.init(.identifier, location, text);
     }
 
     /// Scan text content until we hit a special character
     fn scanText(self: *Lexer) Token {
+        const location = self.getLocation();
         const start = self.index;
 
         while (true) {
@@ -162,18 +182,19 @@ pub const Lexer = struct {
         }
 
         const text = self.source[start..self.index];
-        return Token.init(.text, self.file_path, start, self.index, text);
+        return Token.init(.text, location, text);
     }
 
     /// Get next token (general purpose - for tags, attributes, etc.)
     pub fn next(self: *Lexer) Token {
         self.skipWhitespace();
 
+        const location = self.getLocation();
         const start = self.index;
         const ch = self.peekChar();
 
         if (ch == null) {
-            return Token.init(.eof, self.file_path, start, start, "");
+            return Token.init(.eof, location, "");
         }
 
         const c = ch.?;
@@ -181,33 +202,33 @@ pub const Lexer = struct {
         // Check for HTML tokens
         if (c == '<') {
             _ = self.advance();
-            return Token.init(.langle, self.file_path, start, self.index, "<");
+            return Token.init(.langle, location, "<");
         }
 
         if (c == '>') {
             _ = self.advance();
-            return Token.init(.rangle, self.file_path, start, self.index, ">");
+            return Token.init(.rangle, location, ">");
         }
 
         if (c == '/') {
             _ = self.advance();
-            return Token.init(.slash, self.file_path, start, self.index, "/");
+            return Token.init(.slash, location, "/");
         }
 
         if (c == '=') {
             _ = self.advance();
-            return Token.init(.equal, self.file_path, start, self.index, "=");
+            return Token.init(.equal, location, "=");
         }
 
         // Check for zempl tokens
         if (c == '{') {
             _ = self.advance();
-            return Token.init(.lbrace, self.file_path, start, self.index, "{");
+            return Token.init(.lbrace, location, "{");
         }
 
         if (c == '}') {
             _ = self.advance();
-            return Token.init(.rbrace, self.file_path, start, self.index, "}");
+            return Token.init(.rbrace, location, "}");
         }
 
         // Check for @{
@@ -215,7 +236,7 @@ pub const Lexer = struct {
             if (self.peekCharAhead(1) == '{') {
                 _ = self.advance(); // consume '@'
                 _ = self.advance(); // consume '{'
-                return Token.init(.at_lbrace, self.file_path, start, self.index, self.source[start..self.index]);
+                return Token.init(.at_lbrace, location, self.source[start..self.index]);
             }
             // Otherwise it's an identifier starting with @
             return self.scanIdentifier();
@@ -226,20 +247,21 @@ pub const Lexer = struct {
             return self.scanIdentifier();
         }
 
-        // Unknown character - skip it and return next token
+        // Unknown character - return invalid token with the character
         _ = self.advance();
-        return self.next();
+        return Token.init(.invalid, location, self.source[start..self.index]);
     }
 
     /// Get next token in content context (returns text until special char)
     pub fn nextContent(self: *Lexer) Token {
         self.skipWhitespace();
 
+        const location = self.getLocation();
         const start = self.index;
         const ch = self.peekChar();
 
         if (ch == null) {
-            return Token.init(.eof, self.file_path, start, start, "");
+            return Token.init(.eof, location, "");
         }
 
         const c = ch.?;
@@ -247,12 +269,12 @@ pub const Lexer = struct {
         // If we're at a special character, return it as a token
         if (c == '<') {
             _ = self.advance();
-            return Token.init(.langle, self.file_path, start, self.index, "<");
+            return Token.init(.langle, location, "<");
         }
 
         if (c == '{') {
             _ = self.advance();
-            return Token.init(.lbrace, self.file_path, start, self.index, "{");
+            return Token.init(.lbrace, location, "{");
         }
 
         if (c == '@') {
@@ -260,7 +282,7 @@ pub const Lexer = struct {
             if (self.peekCharAhead(1) == '{') {
                 _ = self.advance(); // consume '@'
                 _ = self.advance(); // consume '{'
-                return Token.init(.at_lbrace, self.file_path, start, self.index, self.source[start..self.index]);
+                return Token.init(.at_lbrace, location, self.source[start..self.index]);
             }
             // It's an @identifier
             return self.scanIdentifier();
@@ -273,8 +295,12 @@ pub const Lexer = struct {
     /// Look at next token without consuming (uses next() method)
     pub fn peek(self: *Lexer) Token {
         const saved_index = self.index;
+        const saved_line = self.line;
+        const saved_column = self.column;
         const token = self.next();
         self.index = saved_index;
+        self.line = saved_line;
+        self.column = saved_column;
         return token;
     }
 };
@@ -458,4 +484,38 @@ test "Complex zempl snippet" {
     try std.testing.expectEqual(TokenType.lbrace, token.token_type);
 
     // The expression {title} would be handled by expression parser
+}
+
+test "Invalid token" {
+    const source = "div $";
+    var lexer = Lexer.init(source, "test.zempl");
+    
+    // First token is valid identifier
+    var token = lexer.next();
+    try std.testing.expectEqual(TokenType.identifier, token.token_type);
+    try std.testing.expectEqualStrings("div", token.text);
+    
+    // Second token is invalid (the $ character)
+    token = lexer.next();
+    try std.testing.expectEqual(TokenType.invalid, token.token_type);
+    try std.testing.expectEqualStrings("$", token.text);
+    try std.testing.expectEqual(@as(usize, 1), token.location.line);
+    try std.testing.expectEqual(@as(usize, 5), token.location.column);
+}
+
+test "Line and column tracking" {
+    const source = "div\nspan";
+    var lexer = Lexer.init(source, "test.zempl");
+    
+    var token = lexer.next();
+    try std.testing.expectEqual(TokenType.identifier, token.token_type);
+    try std.testing.expectEqualStrings("div", token.text);
+    try std.testing.expectEqual(@as(usize, 1), token.location.line);
+    try std.testing.expectEqual(@as(usize, 1), token.location.column);
+    
+    token = lexer.next();
+    try std.testing.expectEqual(TokenType.identifier, token.token_type);
+    try std.testing.expectEqualStrings("span", token.text);
+    try std.testing.expectEqual(@as(usize, 2), token.location.line);
+    try std.testing.expectEqual(@as(usize, 1), token.location.column);
 }
