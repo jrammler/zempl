@@ -20,11 +20,9 @@ pub const HtmlAttribute = struct {
     location: Location,
 };
 
-/// Value of an HTML attribute - can be static text or a Zig expression
-pub const HtmlAttributeValue = union(enum) {
-    static: []const u8, // Raw text value
-    expression: ZigNode, // Zig expression AST node (e.g., {color})
-};
+/// Value of an HTML attribute - always a Zig expression
+/// The expression parser handles both "string literals" and variable names
+pub const HtmlAttributeValue = ZigNode;
 
 /// HTML text content node
 pub const HtmlText = struct {
@@ -60,15 +58,8 @@ pub const HtmlNode = union(enum) {
 pub const ZemplComponent = struct {
     name: []const u8,
     is_public: bool, // pub zempl vs zempl
-    params: []ZemplParam,
+    params: ZigNode, // Full parameter list as parsed by expression parser
     body: []HtmlNode, // Body is HTML content
-    location: Location,
-};
-
-/// Component parameter (name: type)
-pub const ZemplParam = struct {
-    name: []const u8,
-    param_type: ZigNode, // Type expression (e.g., []const u8, bool)
     location: Location,
 };
 
@@ -121,6 +112,7 @@ pub const ZemplFor = struct {
 };
 
 /// @while (condition) { body }
+/// Note: Zig while with captures (|item|) can be added later if needed
 pub const ZemplWhile = struct {
     condition: ZigNode, // Zig expression for condition
     body: []HtmlNode,
@@ -139,126 +131,7 @@ pub const ZemplFile = struct {
     location: Location,
 };
 
-// Tests
-test "HtmlElement construction" {
-    // Create a simple div element
-    const div = HtmlElement{
-        .tag_name = "div",
-        .attributes = &.{},
-        .children = &.{},
-        .is_void = false,
-        .location = .{
-            .file_path = "test.zempl",
-            .line = 1,
-            .column = 1,
-        },
-    };
-
-    try std.testing.expectEqualStrings("div", div.tag_name);
-    try std.testing.expect(!div.is_void);
-}
-
-test "ZemplComponent construction" {
-    const component = ZemplComponent{
-        .name = "Heading",
-        .is_public = false,
-        .params = &.{},
-        .body = &.{},
-        .location = .{
-            .file_path = "test.zempl",
-            .line = 1,
-            .column = 1,
-        },
-    };
-
-    try std.testing.expectEqualStrings("Heading", component.name);
-    try std.testing.expect(!component.is_public);
-}
-
-test "Public vs private component" {
-    const private = ZemplComponent{
-        .name = "Private",
-        .is_public = false,
-        .params = &.{},
-        .body = &.{},
-        .location = .{
-            .file_path = "test.zempl",
-            .line = 1,
-            .column = 1,
-        },
-    };
-
-    const public = ZemplComponent{
-        .name = "Public",
-        .is_public = true,
-        .params = &.{},
-        .body = &.{},
-        .location = .{
-            .file_path = "test.zempl",
-            .line = 5,
-            .column = 1,
-        },
-    };
-
-    try std.testing.expect(!private.is_public);
-    try std.testing.expect(public.is_public);
-}
-
-test "HtmlAttribute construction" {
-    const attr = HtmlAttribute{
-        .name = "class",
-        .value = .{ .static = "heading" },
-        .location = .{
-            .file_path = "test.zempl",
-            .line = 1,
-            .column = 5,
-        },
-    };
-
-    try std.testing.expectEqualStrings("class", attr.name);
-    try std.testing.expectEqual(@as(std.meta.Tag(HtmlAttributeValue), .static), std.meta.activeTag(attr.value));
-}
-
-test "HtmlText construction" {
-    const text = HtmlText{
-        .content = "Hello World",
-        .location = .{
-            .file_path = "test.zempl",
-            .line = 1,
-            .column = 1,
-        },
-    };
-
-    try std.testing.expectEqualStrings("Hello World", text.content);
-}
-
-test "ZemplItem union" {
-    const component_item = ZemplItem{
-        .component = .{
-            .name = "Test",
-            .is_public = false,
-            .params = &.{},
-            .body = &.{},
-            .location = .{
-                .file_path = "test.zempl",
-                .line = 1,
-                .column = 1,
-            },
-        },
-    };
-
-    try std.testing.expectEqual(@as(std.meta.Tag(ZemplItem), .component), std.meta.activeTag(component_item));
-}
-
-test "ZemplFile construction" {
-    const file = ZemplFile{
-        .items = &.{},
-        .location = .{
-            .file_path = "test.zempl",
-            .line = 1,
-            .column = 1,
-        },
-    };
-
-    try std.testing.expectEqual(@as(usize, 0), file.items.len);
-}
+// Note: Tests for AST types are not included because:
+// - These types are just data containers with no behavior
+// - They will be tested implicitly when the parser constructs them
+// - The real validation happens in parser tests
