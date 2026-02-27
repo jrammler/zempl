@@ -41,18 +41,12 @@ pub const Error = struct {
 
     pub fn init(
         err_type: ZemplError,
-        file_path: []const u8,
-        line: usize,
-        column: usize,
+        location: Location,
         message: []const u8,
     ) Error {
         return .{
             .err_type = err_type,
-            .location = .{
-                .file_path = file_path,
-                .line = line,
-                .column = column,
-            },
+            .location = location,
             .message = message,
             .context = null,
             .suggestion = null,
@@ -91,7 +85,7 @@ pub const Error = struct {
         };
 
         try writer.print("error: {s}\n", .{err_name});
-        try writer.print("  ├─ {s}:{d}:{d}\n", .{ self.location.file_path, self.location.line, self.location.column });
+        try writer.print("  ├─ {f}\n", .{self.location});
         try writer.print("  │\n", .{});
         try writer.print("  │ {s}\n", .{self.message});
 
@@ -150,11 +144,15 @@ pub const ErrorReporter = struct {
 
 // Tests
 test "Error initialization" {
+    const loc = Location{
+        .file_path = "test.zempl",
+        .line = 10,
+        .column = 5,
+    };
+
     const err = Error.init(
         ZemplError.SyntaxError,
-        "test.zempl",
-        10,
-        5,
+        loc,
         "unexpected token",
     );
 
@@ -166,11 +164,15 @@ test "Error initialization" {
 }
 
 test "Error with context and suggestion" {
+    const loc = Location{
+        .file_path = "test.zempl",
+        .line = 20,
+        .column = 8,
+    };
+
     var err = Error.init(
         ZemplError.ZigParseError,
-        "test.zempl",
-        20,
-        8,
+        loc,
         "invalid syntax",
     );
 
@@ -186,8 +188,16 @@ test "ErrorReporter" {
     var reporter = ErrorReporter.init(allocator);
     defer reporter.deinit();
 
-    const err1 = Error.init(ZemplError.SyntaxError, "file1.zempl", 1, 1, "error 1");
-    const err2 = Error.init(ZemplError.IoError, "file2.zempl", 5, 10, "error 2");
+    const err1 = Error.init(ZemplError.SyntaxError, .{
+        .file_path = "file1.zempl",
+        .line = 1,
+        .column = 1,
+    }, "error 1");
+    const err2 = Error.init(ZemplError.IoError, .{
+        .file_path = "file2.zempl",
+        .line = 5,
+        .column = 10,
+    }, "error 2");
 
     try reporter.report(err1);
     try reporter.report(err2);
