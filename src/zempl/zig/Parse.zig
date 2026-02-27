@@ -3744,6 +3744,3 @@ const TokenIndex = Ast.TokenIndex;
 const OptionalTokenIndex = Ast.OptionalTokenIndex;
 const ExtraIndex = Ast.ExtraIndex;
 const Token = std.zig.Token;
-
-// ============================================================================
-// Zempl-specific additions to Parse.zig
