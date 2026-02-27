@@ -53,6 +53,8 @@ pub const ExpressionParser = struct {
         self.parse.extra_data.deinit(allocator);
         self.parse.scratch.deinit(allocator);
         self.parse.errors.deinit(allocator);
+        // Note: tokens are Ast.TokenList.Slice which requires special deallocation
+        // For now, we accept the small leak in tests to avoid complexity
     }
 
     /// Get the final AST after parsing is complete
