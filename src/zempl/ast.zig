@@ -112,9 +112,10 @@ pub const ZemplFor = struct {
 };
 
 /// @while (condition) { body }
-/// Note: Zig while with captures (|item|) can be added later if needed
+/// @while (condition) { body } or @while (condition) |capture| { body }
 pub const ZemplWhile = struct {
     condition: ZigNode, // Zig expression for condition
+    capture: ?[]const u8, // Optional capture variable name (e.g., "item" in |item|)
     body: []HtmlNode,
     location: Location,
 };
@@ -130,8 +131,3 @@ pub const ZemplFile = struct {
     items: []ZemplItem,
     location: Location,
 };
-
-// Note: Tests for AST types are not included because:
-// - These types are just data containers with no behavior
-// - They will be tested implicitly when the parser constructs them
-// - The real validation happens in parser tests
