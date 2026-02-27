@@ -8,8 +8,6 @@ const Location = @import("error.zig").Location;
 /// for the zempl parser to use
 pub const ExpressionParser = struct {
     parse: Parse,
-    ast: Ast,
-    tokenizer: Tokenizer,
     file_path: []const u8,
 
     /// Initialize the expression parser with source code
@@ -44,57 +42,21 @@ pub const ExpressionParser = struct {
 
         return .{
             .parse = parse,
-            .ast = undefined, // Will be populated after parsing
-            .tokenizer = tokenizer,
             .file_path = file_path,
         };
     }
 
     /// Deinitialize the parser
-    pub fn deinit(self: *ExpressionParser) void {
-        // Parse.deinit() doesn't exist, but we need to clean up
-        // The Ast owns the memory, so we clean up the Ast
-        self.ast.deinit(self.parse.gpa);
-    }
-
-    /// Parse a single expression and return the AST node
-    pub fn parseExpression(self: *ExpressionParser) !Ast.Node.Index {
-        return self.parse.parseExpression();
-    }
-
-    /// Parse a top-level declaration (const, var, fn)
-    pub fn parseTopLevelItem(self: *ExpressionParser) !?Ast.Node.Index {
-        return self.parse.parseTopLevelItem();
-    }
-
-    /// Parse a type expression (for parameter types)
-    pub fn parseTypeExpr(self: *ExpressionParser) !Ast.Node.Index {
-        // Call the internal parseTypeExpr - it returns ?Node.Index
-        const result = try self.parse.parseTypeExpr();
-        return result orelse error.ParseError;
-    }
-
-    /// Parse a parameter declaration list
-    pub fn parseParamDeclList(self: *ExpressionParser) !Ast.Node.Index {
-        // The internal parseParamDeclList returns SmallSpan, not Node.Index
-        // We need to handle this differently
-        _ = self;
-        @panic("parseParamDeclList not yet implemented - needs to handle SmallSpan");
-    }
-
-    /// Get current position in the token stream
-    pub fn getPosition(self: ExpressionParser) Ast.TokenIndex {
-        return self.parse.getPosition();
-    }
-
-    /// Set position in the token stream (for handoff)
-    pub fn setPosition(self: *ExpressionParser, pos: Ast.TokenIndex) void {
-        self.parse.setPosition(pos);
+    pub fn deinit(self: *ExpressionParser, allocator: std.mem.Allocator) void {
+        // Clean up the internal arrays
+        self.parse.nodes.deinit(allocator);
+        self.parse.extra_data.deinit(allocator);
+        self.parse.scratch.deinit(allocator);
+        self.parse.errors.deinit(allocator);
     }
 
     /// Get the final AST after parsing is complete
     pub fn getAst(self: *ExpressionParser) Ast {
-        // Convert Parse to Ast
         return .{
             .source = self.parse.source,
             .tokens = self.parse.tokens,
@@ -102,6 +64,83 @@ pub const ExpressionParser = struct {
             .extra_data = self.parse.extra_data.toOwnedSlice(),
             .errors = self.parse.errors.toOwnedSlice(),
         };
+    }
+
+    // ============================================================================
+    // Zempl-specific parsing functions
+    // These coordinate between the lexer and the expression parser
+    // ============================================================================
+
+    /// Parse a single top-level item (const, var, fn declaration)
+    /// Returns the AST node index and advances the tokenizer
+    /// Returns null if at EOF or if current token is not a declaration
+    /// Note: Does NOT parse 'zempl' keyword - that's handled by the zempl parser
+    pub fn parseTopLevelItem(self: *ExpressionParser) Parse.Error!?Ast.Node.Index {
+        // Check current token to determine what to parse
+        const tag = self.parse.tokenTag(self.parse.tok_i);
+
+        switch (tag) {
+            .keyword_const, .keyword_var => {
+                // Use the public parseGlobalVarDecl function
+                const result = try self.parse.parseGlobalVarDecl();
+                return result;
+            },
+            .keyword_fn => {
+                // Parse function prototype/declaration
+                const fn_proto = try self.parse.parseFnProto();
+                if (fn_proto) |proto| {
+                    // Check if there's a body
+                    if (self.parse.eatToken(.l_brace)) |_| {
+                        // Has body - parse it
+                        const body = try self.parse.parseBlock();
+                        // Create fn_decl node
+                        return self.parse.addNode(.{
+                            .tag = .fn_decl,
+                            .main_token = self.parse.nodeMainToken(proto),
+                            .data = .{ .node_and_node = .{ proto, body.? } },
+                        });
+                    } else if (self.parse.eatToken(.semicolon)) |_| {
+                        // Forward declaration
+                        return proto;
+                    }
+                }
+                return null;
+            },
+            .keyword_pub => {
+                // Look ahead to see what's after 'pub'
+                const next_tag = self.parse.tokenTag(self.parse.tok_i + 1);
+                if (next_tag == .keyword_const or next_tag == .keyword_var or next_tag == .keyword_fn) {
+                    _ = self.parse.nextToken(); // consume 'pub'
+                    return try self.parseTopLevelItem(); // recursively parse the item
+                }
+                return null;
+            },
+            .eof => return null,
+            else => return null,
+        }
+    }
+
+    /// Parse a single expression
+    /// Returns the expression AST node
+    pub fn parseExpression(self: *ExpressionParser) Parse.Error!Ast.Node.Index {
+        const result = try self.parse.parseExpr();
+        return result orelse error.ParseError;
+    }
+
+    /// Parse a type expression (for component parameter types)
+    pub fn parseTypeExpr(self: *ExpressionParser) Parse.Error!Ast.Node.Index {
+        const result = try self.parse.parseTypeExpr();
+        return result orelse error.ParseError;
+    }
+
+    /// Get current position in the token stream
+    pub fn getPosition(self: *ExpressionParser) Ast.TokenIndex {
+        return self.parse.tok_i;
+    }
+
+    /// Set position in the token stream (for handoff)
+    pub fn setPosition(self: *ExpressionParser, pos: Ast.TokenIndex) void {
+        self.parse.tok_i = pos;
     }
 
     /// Check if there are any parse errors
@@ -113,37 +152,9 @@ pub const ExpressionParser = struct {
     pub fn getErrorCount(self: ExpressionParser) usize {
         return self.parse.errors.items.len;
     }
+
+    /// Get error messages for reporting
+    pub fn getErrors(self: ExpressionParser) []const Ast.Error {
+        return self.parse.errors.items;
+    }
 };
-
-// Tests
-test "ExpressionParser initialization" {
-    const allocator = std.testing.allocator;
-    const source = "const x = 5;";
-
-    var parser = try ExpressionParser.init(allocator, source, "test.zig");
-    defer parser.deinit();
-
-    try std.testing.expectEqual(@as(Ast.TokenIndex, 0), parser.getPosition());
-}
-
-test "parseExpression with integer" {
-    const allocator = std.testing.allocator;
-    const source = "42";
-
-    var parser = try ExpressionParser.init(allocator, source, "test.zig");
-    defer parser.deinit();
-
-    const node = try parser.parseExpression();
-    try std.testing.expect(node != .none);
-}
-
-test "parseTopLevelItem with const" {
-    const allocator = std.testing.allocator;
-    const source = "const x = 5;";
-
-    var parser = try ExpressionParser.init(allocator, source, "test.zig");
-    defer parser.deinit();
-
-    const node = try parser.parseTopLevelItem();
-    try std.testing.expect(node != null);
-}

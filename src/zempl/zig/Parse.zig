@@ -11,7 +11,7 @@ nodes: Ast.NodeList,
 extra_data: std.ArrayListUnmanaged(u32),
 scratch: std.ArrayListUnmanaged(Node.Index),
 
-fn tokenTag(p: *const Parse, token_index: TokenIndex) Token.Tag {
+pub fn tokenTag(p: *const Parse, token_index: TokenIndex) Token.Tag {
     return p.tokens.items(.tag)[token_index];
 }
 
@@ -666,7 +666,7 @@ fn expectTopLevelDeclRecoverable(p: *Parse) error{OutOfMemory}!?Node.Index {
 }
 
 /// FnProto <- KEYWORD_fn IDENTIFIER? LPAREN ParamDeclList RPAREN ByteAlign? AddrSpace? LinkSection? CallConv? EXCLAMATIONMARK? TypeExpr
-fn parseFnProto(p: *Parse) !?Node.Index {
+pub fn parseFnProto(p: *Parse) !?Node.Index {
     const fn_token = p.eatToken(.keyword_fn) orelse return null;
 
     // We want the fn proto node to be before its children in the array.
@@ -760,7 +760,7 @@ fn setVarDeclInitExpr(p: *Parse, var_decl: Node.Index, init_expr: Node.OptionalI
 
 /// VarDeclProto <- (KEYWORD_const / KEYWORD_var) IDENTIFIER (COLON TypeExpr)? ByteAlign? AddrSpace? LinkSection?
 /// Returns a `*_var_decl` node with its rhs (init expression) initialized to .none.
-fn parseVarDeclProto(p: *Parse) !?Node.Index {
+pub fn parseVarDeclProto(p: *Parse) !?Node.Index {
     const mut_token = p.eatToken(.keyword_const) orelse
         p.eatToken(.keyword_var) orelse
         return null;
@@ -831,7 +831,7 @@ fn parseVarDeclProto(p: *Parse) !?Node.Index {
 }
 
 /// GlobalVarDecl <- VarDeclProto (EQUAL Expr?) SEMICOLON
-fn parseGlobalVarDecl(p: *Parse) !?Node.Index {
+pub fn parseGlobalVarDecl(p: *Parse) !?Node.Index {
     const var_decl = try p.parseVarDeclProto() orelse return null;
 
     const init_node: ?Node.Index = switch (p.tokenTag(p.tok_i)) {
@@ -1529,11 +1529,11 @@ fn expectAssignExpr(p: *Parse) !Node.Index {
     return try p.parseAssignExpr() orelse return p.fail(.expected_expr_or_assignment);
 }
 
-fn parseExpr(p: *Parse) Error!?Node.Index {
+pub fn parseExpr(p: *Parse) Error!?Node.Index {
     return p.parseExprPrecedence(0);
 }
 
-fn expectExpr(p: *Parse) Error!Node.Index {
+pub fn expectExpr(p: *Parse) Error!Node.Index {
     return try p.parseExpr() orelse return p.fail(.expected_expr);
 }
 
@@ -1690,7 +1690,7 @@ fn expectPrefixExpr(p: *Parse) Error!Node.Index {
 ///      / LBRACKET ASTERISK (LETTERC / COLON Expr)? RBRACKET
 ///
 /// ArrayTypeStart <- LBRACKET Expr (COLON Expr)? RBRACKET
-fn parseTypeExpr(p: *Parse) Error!?Node.Index {
+pub fn parseTypeExpr(p: *Parse) Error!?Node.Index {
     switch (p.tokenTag(p.tok_i)) {
         .question_mark => return try p.addNode(.{
             .tag = .optional_type,
@@ -3508,7 +3508,7 @@ fn parseSwitchProngList(p: *Parse) !Node.SubRange {
 }
 
 /// ParamDeclList <- (ParamDecl COMMA)* ParamDecl?
-fn parseParamDeclList(p: *Parse) !SmallSpan {
+pub fn parseParamDeclList(p: *Parse) !SmallSpan {
     _ = try p.expectToken(.l_paren);
     const scratch_top = p.scratch.items.len;
     defer p.scratch.shrinkRetainingCapacity(scratch_top);
@@ -3689,7 +3689,7 @@ fn tokensOnSameLine(p: *Parse, token1: TokenIndex, token2: TokenIndex) bool {
     return std.mem.indexOfScalar(u8, p.source[p.tokenStart(token1)..p.tokenStart(token2)], '\n') == null;
 }
 
-fn eatToken(p: *Parse, tag: Token.Tag) ?TokenIndex {
+pub fn eatToken(p: *Parse, tag: Token.Tag) ?TokenIndex {
     return if (p.tokenTag(p.tok_i) == tag) p.nextToken() else null;
 }
 
@@ -3707,7 +3707,7 @@ fn assertToken(p: *Parse, tag: Token.Tag) TokenIndex {
     return token;
 }
 
-fn expectToken(p: *Parse, tag: Token.Tag) Error!TokenIndex {
+pub fn expectToken(p: *Parse, tag: Token.Tag) Error!TokenIndex {
     if (p.tokenTag(p.tok_i) != tag) {
         return p.failMsg(.{
             .tag = .expected_token,
@@ -3727,7 +3727,7 @@ fn expectSemicolon(p: *Parse, error_tag: AstError.Tag, recoverable: bool) Error!
     if (!recoverable) return error.ParseError;
 }
 
-fn nextToken(p: *Parse) TokenIndex {
+pub fn nextToken(p: *Parse) TokenIndex {
     const result = p.tok_i;
     p.tok_i += 1;
     return result;
@@ -3747,70 +3747,3 @@ const Token = std.zig.Token;
 
 // ============================================================================
 // Zempl-specific additions to Parse.zig
-// These functions expose internal parsing capabilities for use by the zempl parser
-// ============================================================================
-
-/// Parse a single top-level item (const, var, fn declaration)
-/// Returns the AST node index and advances the tokenizer
-/// Returns null if at EOF or if current token is not a declaration
-pub fn parseTopLevelItem(p: *Parse) Error!?Node.Index {
-    // Skip any newlines or whitespace tokens (handled by tok_i advancement)
-
-    // Check current token to determine what to parse
-    switch (p.tokenTag(p.tok_i)) {
-        .keyword_const, .keyword_var => {
-            // Parse const/var declaration
-            return p.parseVarDecl();
-        },
-        .keyword_fn => {
-            // Parse function declaration
-            return p.parseFnDecl();
-        },
-        .keyword_pub => {
-            // pub could be followed by const/var/fn
-            // Look ahead to determine which
-            const next_tag = p.tokenTag(p.tok_i + 1);
-            if (next_tag == .keyword_const or next_tag == .keyword_var or next_tag == .keyword_fn) {
-                // It's a public declaration, parse it
-                _ = p.nextToken(); // consume 'pub'
-                switch (p.tokenTag(p.tok_i)) {
-                    .keyword_const, .keyword_var => return p.parseVarDecl(),
-                    .keyword_fn => return p.parseFnDecl(),
-                    else => unreachable,
-                }
-            }
-            // Not a declaration we can handle
-            return null;
-        },
-        .eof => return null,
-        else => {
-            // Not a top-level declaration
-            return null;
-        },
-    }
-}
-
-/// Parse a single expression
-/// Returns the expression AST node
-pub fn parseExpression(p: *Parse) Error!Node.Index {
-    return p.parseExpr();
-}
-
-/// Get current token position
-pub fn getPosition(p: *Parse) TokenIndex {
-    return p.tok_i;
-}
-
-/// Set token position (for resuming parsing after handoff)
-pub fn setPosition(p: *Parse, pos: TokenIndex) void {
-    p.tok_i = pos;
-}
-
-// Tests for zempl-specific parsing functions
-test "parseTopLevelItem with const declaration" {
-    // This test will be implemented once we have the tokenizer integration
-}
-
-test "parseExpression with simple expression" {
-    // This test will be implemented once we have the tokenizer integration
-}
