@@ -142,40 +142,36 @@ Zempl transforms `.zempl` files into `.zig` files. The implementation is divided
 
 ---
 
-## Phase 4: Expression Parser (Fork Parse.zig)
+## Phase 4: Expression Parser (Fork Parse.zig) 🔄
 
 **Goal**: Fork and adapt Zig's Parse.zig for parsing Zig expressions and declarations
 
-### Task 4.1: Copy and Setup
-- Copy `lib/std/zig/Parse.zig` from Zig stdlib to `src/zempl/zig/Parse.zig`
-- Update imports and module structure
-- Add MIT license attribution
+### Task 4.1: Copy and Setup ✓
+- Copy `lib/std/zig/Parse.zig` from Zig stdlib ✓
+- Update imports (`@import("std")` instead of relative) ✓
+- Remove parser_test.zig dependency ✓
 
-### Task 4.2: Expose Required Functions
-- Add `parseTopLevelItem() ?Node.Index`:
-  - Parse const/var/fn declarations
-  - Skip zempl components
-  - Return AST node and advance tokenizer position
-- Add `parseExpression() Node.Index` - Parse single expression
-- Add `getPosition() TokenIndex` - Current token position
-- Add `setPosition(pos: TokenIndex)` - Set token position
+### Task 4.2: Expose Required Functions ✓
+- `parseTopLevelItem()` - Parse const/var/fn declarations ✓
+- `parseExpression()` - Parse single expression (wraps parseExpr) ✓
+- `getPosition()` / `setPosition()` - Token position management ✓
+- Note: `parseTypeExpr()` and `parseParamDeclList()` already exist ✓
 
-### Task 4.3: Expression Parsing API
-- Create wrapper struct `ExpressionParser` in `src/zempl/parse.zig`:
-  - Provide clean API: `parseExpression()`, `parseType()`, `parseTopLevelItem()`
-  - Handle error reporting with source location
-  - Manage tokenizer state
+### Task 4.3: Expression Parsing API (WIP)
+- Created `ExpressionParser` wrapper in `src/zempl/parse.zig` 🔄
+- Basic structure in place, needs refinement
+- Integration with tokenizer needs completion
 
-### Task 4.4: Parse.zig Tests (in src/zempl/zig/Parse.zig)
-- Add `test` blocks for each new function
-- Add `test` blocks for expression parsing
-- Add `test` blocks for declaration parsing
-- Add `test` blocks to verify Zig syntax compatibility
+### Task 4.4: Parse.zig Tests
+- Placeholder tests added ✓
+- Full tests pending wrapper completion
 
 **Deliverables**:
-- Forked Parse.zig with required modifications
-- Expression parser ready to handle Zig code in zempl files
-- Tests for expression parsing
+- ✓ Forked Parse.zig (3811 lines) with exposed functions
+- 🔄 ExpressionParser wrapper (needs completion)
+- ⏳ Full integration tests
+
+**Status**: Core forking complete, wrapper needs more work
 
 ---
 
