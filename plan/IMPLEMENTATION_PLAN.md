@@ -142,7 +142,7 @@ Zempl transforms `.zempl` files into `.zig` files. The implementation is divided
 
 ---
 
-## Phase 4: Expression Parser (Fork Parse.zig) 🔄
+## Phase 4: Expression Parser (Fork Parse.zig) ✓
 
 **Goal**: Fork and adapt Zig's Parse.zig for parsing Zig expressions and declarations
 
@@ -154,95 +154,85 @@ Zempl transforms `.zempl` files into `.zig` files. The implementation is divided
 ### Task 4.2: Expose Required Functions ✓
 - `parseTopLevelItem()` - Parse const/var/fn declarations ✓
 - `parseExpression()` - Parse single expression (wraps parseExpr) ✓
-- `getPosition()` / `setPosition()` - Token position management ✓
-- Note: `parseTypeExpr()` and `parseParamDeclList()` already exist ✓
+- `parseTypeExpr()` - Parse type expressions ✓
+- Note: These are available as functions in zig_parse.zig
 
-### Task 4.3: Expression Parsing API (WIP)
-- Created `ExpressionParser` wrapper in `src/zempl/parse.zig` 🔄
-- Basic structure in place, needs refinement
-- Integration with tokenizer needs completion
+### Task 4.3: Expression Parsing API ✓
+- Created `zig_parse.zig` with on-demand parsing functions ✓
+- Functions create Parse instances temporarily and clean up ✓
+- No stored state - creates fresh tokenization for each expression ✓
+- Functions: `parseExpression()`, `parseTypeExpr()`, `parseTopLevelItem()`
 
-### Task 4.4: Parse.zig Tests
-- Placeholder tests added ✓
-- Full tests pending wrapper completion
+### Task 4.4: Tests
+- ⏳ Tests for zig_parse.zig functions pending
 
 **Deliverables**:
 - ✓ Forked Parse.zig (3811 lines) with exposed functions
-- 🔄 ExpressionParser wrapper (needs completion)
-- ⏳ Full integration tests
+- ✓ zig_parse.zig with function-based API
+- ⏳ Tests for expression parsing functions
 
-**Status**: Core forking complete, wrapper needs more work
+**Status**: Complete - expression parsing infrastructure ready
 
 ---
 
-## Phase 5: Zempl Parser (File Parser)
+## Phase 5: Zempl Parser (File Parser) 🔄
 
 **Goal**: Parse complete zempl files, coordinating lexer, HTML parsing, and expression parser
 
-### Task 5.1: Parser Infrastructure
-- Implement `Parser` struct in `src/zempl/parser.zig`:
-  - `init(lexer: *Lexer, expression_parser: *ExpressionParser, allocator: Allocator)`
-  - `parseFile() !ZemplFile` - Parse complete zempl file
-  - **Parser drives lexer**: calls appropriate lexer method based on context:
-    - In tag context: `lexer.next()` for tag tokens
-    - In content context: `lexer.nextContent()` for text until `<` or `{`
-  - Coordinate with expression parser for Zig code
+### Task 5.1: Parser Infrastructure ✓
+- Implement `Parser` struct in `src/zempl/parser.zig` ✓:
+  - `init(lexer, allocator, file_path)` ✓
+  - `parseFile() !ZemplFile` - basic structure ✓
+  - Void elements list defined ✓
+  - Memory cleanup helpers ✓
 
-### Task 5.2: Top-Level Parsing
+### Task 5.2: Top-Level Parsing ⏳
 - Parse mixed zempl/Zig source:
-  - `const`/`var` declarations → hand off to ExpressionParser
-  - `pub const`/`pub var` declarations → hand off to ExpressionParser
-  - `fn` declarations → hand off to ExpressionParser
-  - `pub fn` declarations → hand off to ExpressionParser
-  - `zempl` keyword → parse zempl component (can be `pub zempl` for exported components)
-  - `pub zempl` → component is public, can be used from other template files
-- Track position and continue parsing after each item
+  - `const`/`var` declarations → hand off to zig_parse
+  - `pub const`/`pub var` declarations → hand off to zig_parse
+  - `fn` declarations → hand off to zig_parse
+  - `pub fn` declarations → hand off to zig_parse
+  - `zempl` keyword → parse zempl component (can be `pub zempl`)
+  - Track position and continue parsing after each item
 
-### Task 5.3: HTML Content Parsing
+### Task 5.3: HTML Content Parsing ⏳
 - Parse HTML elements: `<tag>`, `</tag>`, `<tag />`
-- **Void elements validation**:
-  - Maintain list of void elements: `area`, `base`, `br`, `col`, `embed`, `hr`, `img`, `input`, `link`, `meta`, `param`, `source`, `track`, `wbr`
-  - Void elements can use self-closing syntax: `<br />` or `<br>`
-  - Void elements cannot have content: `<br>text</br>` is an error
-  - Non-void elements cannot use self-closing: `<div />` is an error
+- Void elements validation
 - Parse DOCTYPE and HTML comments
 - Handle text content between tags
 
-### Task 5.4: Attribute Parsing
+### Task 5.4: Attribute Parsing ⏳
 - Parse attribute names (normalize to lowercase)
-- After `=`, hand off to ExpressionParser to parse the value:
-  - Static expressions: `attr=value`
-  - String literals: `attr="value"`
-  - Interpolated: `attr={expression}`
+- After `=`, hand off to zig_parse to parse the value
 
-### Task 5.5: Zempl Construct Parsing
+### Task 5.5: Zempl Construct Parsing ⏳
 - Component definition: `zempl Name(params) { body }`
-- Expression interpolation: `{expression}` (hand off to ExpressionParser)
-- Code blocks: `@{statements}` (hand off to ExpressionParser)
-- Control flow:
-  - `@if (condition)` → parse condition via ExpressionParser, parse body as HTML
-  - `@for (item in iterable)` → parse via ExpressionParser, parse body
-  - `@while (condition)` → parse via ExpressionParser, parse body
-  - `@else` → alternative branch
-- Component calls: `@Component(args)` → parse args via ExpressionParser
+- Expression interpolation: `{expression}`
+- Code blocks: `@{statements}`
+- Control flow: `@if`, `@for`, `@while`, `@else`
+- Component calls: `@Component(args)`
 
-### Task 5.6: Mixed Content Handling
+### Task 5.6: Mixed Content Handling ⏳
 - Parse HTML with embedded `{expression}` interpolation
 - Parse control flow blocks containing HTML
 - Handle proper nesting of HTML and zempl constructs
-- Error on invalid nesting (e.g., mismatched tags)
 
-### Task 5.7: Parser Tests (in src/zempl/parser.zig)
-- Add `test` blocks for top-level parsing
-- Add `test` blocks for HTML parsing with expressions
-- Add `test` blocks for zempl constructs
-- Add `test` blocks for complete zempl files
-- Add `test` blocks for error cases
+### Task 5.7: Parser Tests (in src/zempl/parser.zig) 🔄
+- ✓ Basic initialization test
+- ✓ Empty file test
+- ⏳ Tests for top-level parsing
+- ⏳ Tests for HTML parsing with expressions
+- ⏳ Tests for zempl constructs
+- ⏳ Tests for complete zempl files
+- ⏳ Tests for error cases
 
 **Deliverables**:
-- Complete zempl file parser
-- Can parse all zempl syntax from ARCHITECTURE.md
-- Comprehensive test suite
+- ✓ Parser infrastructure
+- ⏳ Complete zempl file parser
+- ⏳ Can parse all zempl syntax from ARCHITECTURE.md
+- ⏳ Comprehensive test suite
+
+**Status**: Infrastructure complete, parsing logic pending
 
 ---
 

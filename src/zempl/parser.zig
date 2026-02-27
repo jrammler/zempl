@@ -6,13 +6,13 @@ const HtmlNode = @import("ast.zig").HtmlNode;
 const HtmlElement = @import("ast.zig").HtmlElement;
 const HtmlAttribute = @import("ast.zig").HtmlAttribute;
 const Lexer = @import("lexer.zig").Lexer;
-const ExpressionParser = @import("parse.zig").ExpressionParser;
+const zig_parse = @import("zig_parse.zig");
 const Location = @import("error.zig").Location;
 
 /// Parser for zempl files - coordinates lexer, HTML parsing, and expression parsing
+/// Expression parsing is done on-demand using functions from parse.zig
 pub const Parser = struct {
     lexer: *Lexer,
-    expression_parser: *ExpressionParser,
     allocator: std.mem.Allocator,
     file_path: []const u8,
 
@@ -23,10 +23,9 @@ pub const Parser = struct {
     };
 
     /// Initialize the parser
-    pub fn init(lexer: *Lexer, expression_parser: *ExpressionParser, allocator: std.mem.Allocator, file_path: []const u8) Parser {
+    pub fn init(lexer: *Lexer, allocator: std.mem.Allocator, file_path: []const u8) Parser {
         return .{
             .lexer = lexer,
-            .expression_parser = expression_parser,
             .allocator = allocator,
             .file_path = file_path,
         };
@@ -114,23 +113,18 @@ pub const Parser = struct {
 test "parser initialization" {
     const source = "<div></div>";
     var lexer = Lexer.init(source, "test.zempl");
-    var expr_parser = try ExpressionParser.init(std.testing.allocator, source, "test.zempl");
-    defer expr_parser.deinit(std.testing.allocator);
 
-    const parser = Parser.init(&lexer, &expr_parser, std.testing.allocator, "test.zempl");
+    const parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
 
     try std.testing.expectEqual(&lexer, parser.lexer);
-    try std.testing.expectEqual(&expr_parser, parser.expression_parser);
     try std.testing.expectEqualStrings("test.zempl", parser.file_path);
 }
 
 test "parser returns empty file for empty input" {
     const source = "";
     var lexer = Lexer.init(source, "test.zempl");
-    var expr_parser = try ExpressionParser.init(std.testing.allocator, source, "test.zempl");
-    defer expr_parser.deinit(std.testing.allocator);
 
-    const parser = Parser.init(&lexer, &expr_parser, std.testing.allocator, "test.zempl");
+    const parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
     var mutable_parser = parser;
     const file = try mutable_parser.parseFile();
     defer {
