@@ -100,39 +100,46 @@ Zempl transforms `.zempl` files into `.zig` files. The implementation is divided
 
 ---
 
-## Phase 3: AST Definition
+## Phase 3: AST Definition ✓
 
 **Goal**: Define the abstract syntax tree structure for zempl components
 
-### Task 3.1: HTML AST Nodes
-- Define in `src/zempl/ast.zig`:
-  - `HtmlElement` - Tag name, attributes, children
-  - `HtmlAttribute` - Name and value (static or expression)
-  - `HtmlText` - Static text content
-  - `HtmlComment` - HTML comment
-  - `HtmlDoctype` - DOCTYPE declaration
+### Task 3.1: HTML AST Nodes ✓
+- Define in `src/zempl/ast.zig` ✓:
+  - `HtmlElement` - Tag name, attributes[], children[], is_void, location ✓
+  - `HtmlAttribute` - Name and value (static text or Zig expression), location ✓
+  - `HtmlAttributeValue` - Union of static or expression ✓
+  - `HtmlText` - Static text content ✓
+  - `HtmlComment` - HTML comment ✓
+  - `HtmlDoctype` - DOCTYPE declaration ✓
+  - `HtmlNode` - Union of all HTML content types ✓
 
-### Task 3.2: Zempl AST Nodes
-- Define:
-  - `ZemplComponent` - Component name, parameters, body
-  - `ZemplExpression` - Interpolated expression `{expr}`
-  - `ZemplCodeBlock` - Code block `@{...}`
-  - `ZemplComponentCall` - Component invocation `@Component(args)`
-  - `ZemplControlFlow` - @if, @for, @while with branches
+### Task 3.2: Zempl AST Nodes ✓
+- Define ✓:
+  - `ZemplComponent` - Name, is_public, params[], body[], location ✓
+  - `ZemplParam` - Name and type (Zig expression), location ✓
+  - `ZemplExpression` - Zig expression node, location ✓
+  - `ZemplCodeBlock` - Zig statements node, location ✓
+  - `ZemplComponentCall` - Component name, args[], location ✓
+  - `ZemplArg` - Argument expression, location ✓
+  - `ZemplControlFlow` - Union of if/for/while ✓
+  - `ZemplIf`/`ZemplFor`/`ZemplWhile` - Control flow structures ✓
 
-### Task 3.3: Top-Level Structure
-- Define:
-  - `ZemplFile` - Container for declarations and components
-  - `Declaration` - Zig const/var/fn declarations
-  - `ZemplItem` - Union of declaration or component
+### Task 3.3: Top-Level Structure ✓
+- Define ✓:
+  - `ZemplFile` - Container for declarations and components ✓
+  - `ZemplItem` - Union of declaration or component ✓
+  - `ZigNode` - std.zig.Ast.Node.Index for Zig AST integration ✓
 
-### Task 3.4: AST Tests (in src/zempl/ast.zig)
-- Add `test` blocks for AST construction
-- Add `test` blocks for AST traversal utilities
+### Task 3.4: AST Tests (in src/zempl/ast.zig) ✓
+- 7 test blocks for AST construction ✓
+- Tests for components, elements, attributes, unions ✓
 
 **Deliverables**:
-- Complete AST type definitions
-- AST construction utilities
+- ✓ Complete AST type definitions
+- ✓ AST construction utilities
+- ✓ 7 comprehensive tests passing
+- ✓ Integration with std.zig.Ast for Zig expressions
 
 ---
 
