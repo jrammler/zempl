@@ -295,6 +295,18 @@ pub const Lexer = struct {
         self.column = saved_column;
         return token;
     }
+
+    /// Look at next content token without consuming (uses nextContent() method)
+    pub fn peekContent(self: *Lexer) Token {
+        const saved_index = self.index;
+        const saved_line = self.line;
+        const saved_column = self.column;
+        const token = self.nextContent();
+        self.index = saved_index;
+        self.line = saved_line;
+        self.column = saved_column;
+        return token;
+    }
 };
 
 // Tests
@@ -737,4 +749,29 @@ test "nextContent handles text with exclamation" {
     const token = lexer.nextContent();
     try std.testing.expectEqual(TokenType.text, token.token_type);
     try std.testing.expectEqualStrings("Hello!", token.text);
+}
+
+test "peekContent does not advance lexer" {
+    const source = "Hello <div>";
+    var lexer = Lexer.init(source, "test.zempl");
+
+    // peekContent should return the same as nextContent but not advance
+    const peek1 = lexer.peekContent();
+    try std.testing.expectEqual(TokenType.text, peek1.token_type);
+    try std.testing.expectEqualStrings("Hello ", peek1.text);
+
+    // Position should be unchanged
+    const peek2 = lexer.peekContent();
+    try std.testing.expectEqual(TokenType.text, peek2.token_type);
+    try std.testing.expectEqualStrings("Hello ", peek2.text);
+
+    // Now actually consume it
+    const token = lexer.nextContent();
+    try std.testing.expectEqual(TokenType.text, token.token_type);
+    try std.testing.expectEqualStrings("Hello ", token.text);
+
+    // Next should be empty text (delimiter at <)
+    const peek3 = lexer.peekContent();
+    try std.testing.expectEqual(TokenType.text, peek3.token_type);
+    try std.testing.expectEqualStrings("", peek3.text);
 }
