@@ -1032,3 +1032,206 @@ test "parser handles HTML attributes" {
     try std.testing.expectEqualStrings("class", file.items[0].component.body[0].element.attributes[0].name);
     try std.testing.expectEqualStrings("id", file.items[0].component.body[0].element.attributes[2].name);
 }
+
+// ============================================================================
+// Unit Tests for Internal Parser Functions
+// ============================================================================
+
+test "isVoidElement recognizes all void tags" {
+    try std.testing.expect(Parser.isVoidElement("br"));
+    try std.testing.expect(Parser.isVoidElement("img"));
+    try std.testing.expect(Parser.isVoidElement("input"));
+    try std.testing.expect(Parser.isVoidElement("hr"));
+    try std.testing.expect(Parser.isVoidElement("meta"));
+    try std.testing.expect(Parser.isVoidElement("link"));
+    try std.testing.expect(Parser.isVoidElement("area"));
+    try std.testing.expect(Parser.isVoidElement("base"));
+    try std.testing.expect(Parser.isVoidElement("col"));
+    try std.testing.expect(Parser.isVoidElement("embed"));
+    try std.testing.expect(Parser.isVoidElement("param"));
+    try std.testing.expect(Parser.isVoidElement("source"));
+    try std.testing.expect(Parser.isVoidElement("track"));
+    try std.testing.expect(Parser.isVoidElement("wbr"));
+}
+
+test "isVoidElement returns false for non-void tags" {
+    try std.testing.expect(!Parser.isVoidElement("div"));
+    try std.testing.expect(!Parser.isVoidElement("span"));
+    try std.testing.expect(!Parser.isVoidElement("p"));
+    try std.testing.expect(!Parser.isVoidElement("html"));
+}
+
+test "parseExpressionInterpolation handles simple expression" {
+    const source = "zempl Test() { <div>{name}</div> }";
+    var lexer = Lexer.init(source, "test.zempl");
+    var parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
+    const file = try parser.parseFile();
+    defer file.deinit(std.testing.allocator);
+
+    try std.testing.expect(file.items[0].component.body[0].element.children[0] == .expression);
+    try std.testing.expectEqualStrings("name", file.items[0].component.body[0].element.children[0].expression.expr);
+}
+
+test "parseExpressionInterpolation handles complex expression" {
+    const source = "zempl Test() { <div>{user.name + \"test\"}</div> }";
+    var lexer = Lexer.init(source, "test.zempl");
+    var parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
+    const file = try parser.parseFile();
+    defer file.deinit(std.testing.allocator);
+
+    try std.testing.expect(file.items[0].component.body[0].element.children[0] == .expression);
+    try std.testing.expect(file.items[0].component.body[0].element.children[0].expression.expr.len > 0);
+}
+
+test "parseExpressionInterpolation handles nested braces" {
+    const source = "zempl Test() { <div>{if (true) { a } else { b }}</div> }";
+    var lexer = Lexer.init(source, "test.zempl");
+    var parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
+    const file = try parser.parseFile();
+    defer file.deinit(std.testing.allocator);
+
+    try std.testing.expect(file.items[0].component.body[0].element.children[0] == .expression);
+}
+
+test "parseTextContent handles plain text" {
+    const source = "zempl Test() { <div>Hello World</div> }";
+    var lexer = Lexer.init(source, "test.zempl");
+    var parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
+    const file = try parser.parseFile();
+    defer file.deinit(std.testing.allocator);
+
+    try std.testing.expect(file.items[0].component.body[0].element.children[0] == .text);
+    try std.testing.expectEqualStrings("Hello World", file.items[0].component.body[0].element.children[0].text.content);
+}
+
+test "parseTextContent handles text with special chars" {
+    const source = "zempl Test() { <div>Hello &amp; World!</div> }";
+    var lexer = Lexer.init(source, "test.zempl");
+    var parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
+    const file = try parser.parseFile();
+    defer file.deinit(std.testing.allocator);
+
+    try std.testing.expect(file.items[0].component.body[0].element.children[0] == .text);
+}
+
+test "parseComponentCall handles component without args" {
+    const source = "zempl Test() { @Header }";
+    var lexer = Lexer.init(source, "test.zempl");
+    var parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
+    const file = try parser.parseFile();
+    defer file.deinit(std.testing.allocator);
+
+    try std.testing.expect(file.items[0].component.body[0] == .component_call);
+    try std.testing.expectEqualStrings("Header", file.items[0].component.body[0].component_call.component_name);
+    try std.testing.expectEqual(@as(usize, 0), file.items[0].component.body[0].component_call.args.len);
+}
+
+test "parseComponentCall handles component with args" {
+    const source = "zempl Test() { @Button(text: \"Click\") }";
+    var lexer = Lexer.init(source, "test.zempl");
+    var parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
+    const file = try parser.parseFile();
+    defer file.deinit(std.testing.allocator);
+
+    try std.testing.expect(file.items[0].component.body[0] == .component_call);
+    try std.testing.expectEqualStrings("Button", file.items[0].component.body[0].component_call.component_name);
+}
+
+test "parseComponentCall handles component with multiple args" {
+    const source = "zempl Test() { @Card(title: \"Hello\", body: content) }";
+    var lexer = Lexer.init(source, "test.zempl");
+    var parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
+    const file = try parser.parseFile();
+    defer file.deinit(std.testing.allocator);
+
+    try std.testing.expect(file.items[0].component.body[0] == .component_call);
+    try std.testing.expectEqualStrings("Card", file.items[0].component.body[0].component_call.component_name);
+}
+
+test "parseHtmlElementOrComment handles self-closing tag" {
+    const source = "zempl Test() { <div><br/></div> }";
+    var lexer = Lexer.init(source, "test.zempl");
+    var parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
+    const file = try parser.parseFile();
+    defer file.deinit(std.testing.allocator);
+
+    try std.testing.expect(file.items[0].component.body[0].element.children[0] == .element);
+    try std.testing.expect(file.items[0].component.body[0].element.children[0].element.is_void);
+}
+
+test "parseHtmlElementOrComment handles deep nesting" {
+    const source = "zempl Test() { <div><p><span><strong>Deep</strong></span></p></div> }";
+    var lexer = Lexer.init(source, "test.zempl");
+    var parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
+    const file = try parser.parseFile();
+    defer file.deinit(std.testing.allocator);
+
+    try std.testing.expect(file.items[0].component.body[0].element.children[0].element.children[0].element.children[0] == .element);
+}
+
+test "parseElementStart handles element with boolean attribute" {
+    const source = "zempl Test() { <input disabled> }";
+    var lexer = Lexer.init(source, "test.zempl");
+    var parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
+    const file = try parser.parseFile();
+    defer file.deinit(std.testing.allocator);
+
+    try std.testing.expect(file.items[0].component.body[0] == .element);
+    try std.testing.expectEqualStrings("input", file.items[0].component.body[0].element.tag_name);
+}
+
+test "parseAttribute handles attribute with expression value" {
+    const source = "zempl Test() { <div class={classes}>Content</div> }";
+    var lexer = Lexer.init(source, "test.zempl");
+    var parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
+    const file = try parser.parseFile();
+    defer file.deinit(std.testing.allocator);
+
+    try std.testing.expect(file.items[0].component.body[0] == .element);
+}
+
+test "parseZemplComponent fails without zempl keyword" {
+    const source = "InvalidComponent() { }";
+    var lexer = Lexer.init(source, "test.zempl");
+    var parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
+
+    const result = parser.parseFile();
+    try std.testing.expectError(error.ExpectedZemplKeyword, result);
+}
+
+test "parseZemplComponent fails without component name" {
+    const source = "zempl () { }";
+    var lexer = Lexer.init(source, "test.zempl");
+    var parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
+
+    const result = parser.parseFile();
+    try std.testing.expectError(error.ExpectedComponentName, result);
+}
+
+test "parseZemplComponent fails without param list" {
+    const source = "zempl Test { }";
+    var lexer = Lexer.init(source, "test.zempl");
+    var parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
+
+    const result = parser.parseFile();
+    try std.testing.expectError(error.ExpectedParamList, result);
+}
+
+test "parseHtmlBody fails without opening brace" {
+    const source = "zempl Test() <div>Content</div> }";
+    var lexer = Lexer.init(source, "test.zempl");
+    var parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
+
+    const result = parser.parseFile();
+    try std.testing.expectError(error.ExpectedLBrace, result);
+}
+
+test "parseHtmlBody fails with unclosed tag" {
+    const source = "zempl Test() { <div>Content }";
+    var lexer = Lexer.init(source, "test.zempl");
+    var parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
+
+    const result = parser.parseFile();
+    // The parser encounters '}' when expecting </div>, so it returns UnexpectedRBrace
+    try std.testing.expectError(error.UnexpectedRBrace, result);
+}
