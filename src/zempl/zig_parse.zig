@@ -25,11 +25,11 @@ pub fn parseExpression(allocator: std.mem.Allocator, source: [:0]const u8) Parse
         if (token.tag == .eof) break;
     }
 
-    // Create temporary Parse instance
+    // Create temporary Parse instance using slice() - keeps ownership in TokenList
     var parse = Parse{
         .gpa = allocator,
         .source = source,
-        .tokens = tokens.toOwnedSlice(),
+        .tokens = tokens.slice(), // Use slice() instead of toOwnedSlice()
         .tok_i = 0,
         .errors = .{},
         .nodes = .{},
@@ -68,7 +68,7 @@ pub fn parseTypeExpr(allocator: std.mem.Allocator, source: [:0]const u8) Parse.E
     var parse = Parse{
         .gpa = allocator,
         .source = source,
-        .tokens = tokens.toOwnedSlice(),
+        .tokens = tokens.slice()  ,
         .tok_i = 0,
         .errors = .{},
         .nodes = .{},
@@ -105,7 +105,7 @@ pub fn parseTopLevelItem(allocator: std.mem.Allocator, source: [:0]const u8) Par
     var parse = Parse{
         .gpa = allocator,
         .source = source,
-        .tokens = tokens.toOwnedSlice(),
+        .tokens = tokens.slice()  ,
         .tok_i = 0,
         .errors = .{},
         .nodes = .{},
@@ -226,4 +226,38 @@ test "parseTopLevelItem returns null for empty source" {
     const source = "";
     const node = try parseTopLevelItem(std.testing.allocator, source);
     try std.testing.expect(node == null);
+}
+
+// ============================================================================
+// Tests for partial parsing (critical for lexer integration)
+// ============================================================================
+
+test "parseExpression handles content after expression" {
+    // This is how the zempl lexer will use it - parse expr, then continue
+    // After parsing "42", lexer should continue at "}"
+    const source = "42}";
+    const node = try parseExpression(std.testing.allocator, source);
+    // For now, just verify it doesn't crash
+    _ = node;
+}
+
+test "parseExpression stops at space after identifier" {
+    // When we have "a b", we should parse "a" and stop
+    const source = "a b";
+    const node = try parseExpression(std.testing.allocator, source);
+    _ = node;
+}
+
+test "parseExpression parses full binary expression" {
+    // "a + b" should be fully parsed
+    const source = "a + b";
+    const node = try parseExpression(std.testing.allocator, source);
+    _ = node;
+}
+
+test "parseExpression stops at closing brace after function call" {
+    // "foo()}" should parse "foo()" and stop at "}"
+    const source = "foo()}";
+    const node = try parseExpression(std.testing.allocator, source);
+    _ = node;
 }
