@@ -195,7 +195,7 @@ pub fn parseTopLevelItem(allocator: std.mem.Allocator, source: [:0]const u8) !?P
 
     return ParseResult{
         .source_text = result_str,
-        .consumed = trimmed.len,
+        .consumed = end - start,
     };
 }
 
