@@ -60,14 +60,8 @@ pub const Parser = struct {
                 self.lexer.advanceBy(result.consumed);
             } else {
                 // Not a Zig declaration, try parsing as zempl component
-                if (token.token_type == .zempl_keyword) {
-                    // Consume the zempl keyword
-                    _ = self.lexer.next();
-                    const component = try self.parseZemplComponent();
-                    try items.append(self.allocator, .{ .component = component });
-                } else {
-                    return error.UnexpectedToken;
-                }
+                const component = try self.parseZemplComponent();
+                try items.append(self.allocator, .{ .component = component });
             }
         }
 
@@ -84,6 +78,12 @@ pub const Parser = struct {
     /// Parse a Zig declaration from current position
     /// Parse a zempl component definition
     fn parseZemplComponent(self: *Parser) !ZemplComponent {
+        // Expect zempl keyword
+        const zempl_token = self.lexer.next();
+        if (zempl_token.token_type != .zempl_keyword) {
+            return error.ExpectedZemplKeyword;
+        }
+
         // Expect component name (identifier)
         const name_token = self.lexer.next();
         if (name_token.token_type != .identifier) {
@@ -100,19 +100,12 @@ pub const Parser = struct {
             error.ParseError => return error.ExpectedParamList,
             else => |e| return e,
         };
-        // Note: params_result.source_text ownership is transferred to the component
-        // and will be freed in deinitComponent
+        errdefer self.allocator.free(params_result.source_text);
 
         // Advance lexer by consumed bytes
         self.lexer.advanceBy(params_result.consumed);
 
-        // Expect opening brace
-        const lbrace_token = self.lexer.next();
-        if (lbrace_token.token_type != .lbrace) {
-            return error.ExpectedLBrace;
-        }
-
-        // Parse body (HTML content)
+        // Parse body (HTML content) - expects opening brace internally
         const body = try self.parseHtmlBody();
 
         return ZemplComponent{
@@ -125,7 +118,14 @@ pub const Parser = struct {
     }
 
     /// Parse HTML body content
+    /// Expects the opening brace to be the next token
     fn parseHtmlBody(self: *Parser) ![]HtmlNode {
+        // Expect opening brace
+        const lbrace_token = self.lexer.next();
+        if (lbrace_token.token_type != .lbrace) {
+            return error.ExpectedLBrace;
+        }
+
         var nodes = std.ArrayList(HtmlNode).empty;
         errdefer {
             for (nodes.items) |*node| {

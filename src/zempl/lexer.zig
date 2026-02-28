@@ -74,7 +74,7 @@ pub const Lexer = struct {
     /// Advance position by count bytes, updating line and column tracking
     pub fn advanceBy(self: *Lexer, count: usize) void {
         var remaining: usize = count;
-        while (remaining > 0 and self.index < self.source.len) : (remaining -= 1) {
+        while (remaining > 0) : (remaining -= 1) {
             _ = self.advance();
         }
     }
