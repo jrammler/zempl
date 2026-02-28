@@ -519,7 +519,8 @@ Integration tests go in `test/integration.zig` and import the zempl modules:
 ```zig
 // test/integration.zig
 
-const zempl = @import("../src/zempl.zig");
+const lexer = @import("../src/zempl/lexer.zig");
+const parser = @import("../src/zempl/parser.zig");
 
 test "end-to-end: simple template" {
     // Test complete pipeline
