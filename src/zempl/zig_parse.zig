@@ -73,8 +73,9 @@ pub fn parseExpression(allocator: std.mem.Allocator, source: [:0]const u8) !Pars
     };
 }
 
-/// Parse a Zig type expression and return its source text + consumed length.
-pub fn parseTypeExpr(allocator: std.mem.Allocator, source: [:0]const u8) !ParseResult {
+/// Parse a parameter declaration list (e.g., `(a: i32, b: u32)`) and return source text + consumed length.
+/// This is used to parse zempl component parameter lists.
+pub fn parseParamDeclList(allocator: std.mem.Allocator, source: [:0]const u8) !?ParseResult {
     var tokens = Ast.TokenList{};
     defer tokens.deinit(allocator);
 
@@ -100,8 +101,19 @@ pub fn parseTypeExpr(allocator: std.mem.Allocator, source: [:0]const u8) !ParseR
         .extra_data = .{},
         .scratch = .{},
     };
+    defer {
+        parse.nodes.deinit(allocator);
+        parse.extra_data.deinit(allocator);
+        parse.scratch.deinit(allocator);
+        parse.errors.deinit(allocator);
+    }
 
-    _ = try parse.parseTypeExpr() orelse return error.ParseError;
+    // Check if it starts with l_paren
+    if (parse.tokenTag(parse.tok_i) != .l_paren) {
+        return null;
+    }
+
+    _ = try parse.parseParamDeclList();
 
     const final_tok_i = parse.tok_i;
     const start: u32 = 0;
@@ -113,12 +125,6 @@ pub fn parseTypeExpr(allocator: std.mem.Allocator, source: [:0]const u8) !ParseR
     const source_text = source[start..end];
     const trimmed = std.mem.trim(u8, source_text, &std.ascii.whitespace);
     const result_str = try allocator.dupe(u8, trimmed);
-
-    parse.nodes.deinit(allocator);
-    parse.extra_data.deinit(allocator);
-    parse.scratch.deinit(allocator);
-    parse.errors.deinit(allocator);
-    // Note: tokens_slice is cleaned up by defer tokens.deinit(allocator)
 
     return ParseResult{
         .source_text = result_str,
@@ -244,28 +250,41 @@ test "parseExpression returns source text for function call" {
     try std.testing.expect(result.source_text.len > 0);
 }
 
-test "parseTypeExpr returns source text for primitive type" {
+test "parseParamDeclList returns source text for empty params" {
+    const source = "()";
+    const result = try parseParamDeclList(std.testing.allocator, source);
+    try std.testing.expect(result != null);
+    if (result) |r| {
+        defer std.testing.allocator.free(r.source_text);
+        try std.testing.expectEqualStrings("()", r.source_text);
+        try std.testing.expectEqual(@as(usize, 2), r.consumed);
+    }
+}
+
+test "parseParamDeclList returns source text for single param" {
+    const source = "(x: i32)";
+    const result = try parseParamDeclList(std.testing.allocator, source);
+    try std.testing.expect(result != null);
+    if (result) |r| {
+        defer std.testing.allocator.free(r.source_text);
+        try std.testing.expectEqualStrings("(x: i32)", r.source_text);
+    }
+}
+
+test "parseParamDeclList returns source text for multiple params" {
+    const source = "(a: i32, b: []const u8)";
+    const result = try parseParamDeclList(std.testing.allocator, source);
+    try std.testing.expect(result != null);
+    if (result) |r| {
+        defer std.testing.allocator.free(r.source_text);
+        try std.testing.expectEqualStrings("(a: i32, b: []const u8)", r.source_text);
+    }
+}
+
+test "parseParamDeclList returns null if not starting with l_paren" {
     const source = "i32";
-    const result = try parseTypeExpr(std.testing.allocator, source);
-    defer std.testing.allocator.free(result.source_text);
-    try std.testing.expectEqualStrings("i32", result.source_text);
-    try std.testing.expectEqual(@as(usize, 3), result.consumed);
-}
-
-test "parseTypeExpr returns source text for slice type" {
-    // TODO: Implement proper AST traversal to extract full type expression
-    const source = "[]const u8";
-    const result = try parseTypeExpr(std.testing.allocator, source);
-    defer std.testing.allocator.free(result.source_text);
-    try std.testing.expect(result.source_text.len > 0);
-}
-
-test "parseTypeExpr returns source text for pointer type" {
-    // TODO: Implement proper AST traversal to extract full type expression
-    const source = "*u32";
-    const result = try parseTypeExpr(std.testing.allocator, source);
-    defer std.testing.allocator.free(result.source_text);
-    try std.testing.expect(result.source_text.len > 0);
+    const result = try parseParamDeclList(std.testing.allocator, source);
+    try std.testing.expect(result == null);
 }
 
 test "parseTopLevelItem returns source text for const declaration" {

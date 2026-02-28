@@ -82,53 +82,6 @@ pub const Parser = struct {
     }
 
     /// Parse a Zig declaration from current position
-    /// start_pos is the position in the source where the declaration begins
-    fn parseDeclaration(self: *Parser, start_pos: usize) ![]const u8 {
-        // We need to find the end of the declaration
-        // A declaration ends with ';' or with a block '{ ... }'
-
-        var paren_depth: i32 = 0;
-        var brace_depth: i32 = 0;
-        var found_semicolon = false;
-
-        // Continue parsing tokens until we reach the end of the declaration
-        while (true) {
-            const token = self.lexer.next();
-
-            switch (token.token_type) {
-                .eof => break,
-                .text => {
-                    // Check for semicolon, braces, parens
-                    for (token.text) |c| {
-                        switch (c) {
-                            '(' => paren_depth += 1,
-                            ')' => paren_depth -= 1,
-                            '{' => brace_depth += 1,
-                            '}' => brace_depth -= 1,
-                            ';' => if (paren_depth == 0 and brace_depth == 0) {
-                                found_semicolon = true;
-                            },
-                            else => {},
-                        }
-                    }
-                },
-                else => {},
-            }
-
-            // End conditions:
-            // 1. Found semicolon at top level (paren_depth == 0, brace_depth == 0)
-            // 2. Found closing brace at brace_depth == -1 (end of function body)
-            if (found_semicolon) break;
-            if (brace_depth < 0) break; // End of function with body
-        }
-
-        // Extract the declaration text from source
-        const end_pos = self.lexer.getPosition();
-        const decl_text = self.lexer.source[start_pos..end_pos];
-
-        return try self.allocator.dupe(u8, decl_text);
-    }
-
     /// Parse a zempl component definition
     fn parseZemplComponent(self: *Parser) !ZemplComponent {
         // Expect component name (identifier)
@@ -139,29 +92,21 @@ pub const Parser = struct {
         const name = try self.allocator.dupe(u8, name_token.text);
         errdefer self.allocator.free(name);
 
-        // Expect parameter list (parentheses with content)
-        // For now, just skip to the opening brace
-        var paren_depth: i32 = 0;
+        // Parse parameter list using zig_parse
+        const start_pos = self.lexer.getPosition();
+        const source_slice: [:0]const u8 = self.lexer.source[start_pos.. :0];
 
-        while (true) {
-            const token = self.lexer.next();
-            switch (token.token_type) {
-                .eof => return error.UnexpectedEof,
-                .text => {
-                    // Check for parens in the text
-                    for (token.text) |c| {
-                        if (c == '(') paren_depth += 1;
-                        if (c == ')') paren_depth -= 1;
-                    }
-                },
-                .lbrace => {
-                    if (paren_depth == 0) {
-                        // We've reached the body opening brace
-                        break;
-                    }
-                },
-                else => {},
-            }
+        const params_result = try zig_parse.parseParamDeclList(self.allocator, source_slice) orelse return error.ExpectedParamList;
+        // Note: params_result.source_text ownership is transferred to the component
+        // and will be freed in deinitComponent
+
+        // Advance lexer by consumed bytes
+        self.lexer.advanceBy(params_result.consumed);
+
+        // Expect opening brace
+        const lbrace_token = self.lexer.next();
+        if (lbrace_token.token_type != .lbrace) {
+            return error.ExpectedLBrace;
         }
 
         // Parse body (HTML content)
@@ -170,7 +115,7 @@ pub const Parser = struct {
         return ZemplComponent{
             .name = name,
             .is_public = false, // TODO: handle pub zempl
-            .params = "", // TODO: parse params properly
+            .params = params_result.source_text,
             .body = body,
             .location = name_token.location,
         };
@@ -340,6 +285,27 @@ test "parser handles simple zempl component" {
     try std.testing.expectEqual(@as(usize, 1), file.items.len);
     try std.testing.expect(file.items[0] == .component);
     try std.testing.expectEqualStrings("Hello", file.items[0].component.name);
+    try std.testing.expectEqualStrings("()", file.items[0].component.params);
+}
+
+test "parser handles zempl component with params" {
+    const source = "zempl Greeting(name: []const u8) { <div>Hello</div> }";
+    var lexer = Lexer.init(source, "test.zempl");
+
+    const parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
+    var mutable_parser = parser;
+    const file = try mutable_parser.parseFile();
+    defer {
+        for (file.items) |*item| {
+            mutable_parser.deinitZemplItem(item);
+        }
+        std.testing.allocator.free(file.items);
+    }
+
+    try std.testing.expectEqual(@as(usize, 1), file.items.len);
+    try std.testing.expect(file.items[0] == .component);
+    try std.testing.expectEqualStrings("Greeting", file.items[0].component.name);
+    try std.testing.expectEqualStrings("(name: []const u8)", file.items[0].component.params);
 }
 
 test "parser handles multiple declarations" {
