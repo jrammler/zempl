@@ -1,9 +1,6 @@
 const std = @import("std");
 const Location = @import("error.zig").Location;
 
-// Forward declaration for expression parser integration
-pub const ZigNode = std.zig.Ast.Node.Index;
-
 /// HTML element node
 pub const HtmlElement = struct {
     tag_name: []const u8,
@@ -20,9 +17,9 @@ pub const HtmlAttribute = struct {
     location: Location,
 };
 
-/// Value of an HTML attribute - always a Zig expression
-/// The expression parser handles both "string literals" and variable names
-pub const HtmlAttributeValue = ZigNode;
+/// Value of an HTML attribute - source text of a Zig expression
+/// The expression has been validated by the Zig parser
+pub const HtmlAttributeValue = []const u8;
 
 /// HTML text content node
 pub const HtmlText = struct {
@@ -58,20 +55,20 @@ pub const HtmlNode = union(enum) {
 pub const ZemplComponent = struct {
     name: []const u8,
     is_public: bool, // pub zempl vs zempl
-    params: ZigNode, // Full parameter list as parsed by expression parser
+    params: []const u8, // Source text of parameter list (e.g., "(title: []const u8)")
     body: []HtmlNode, // Body is HTML content
     location: Location,
 };
 
 /// Expression interpolation {expr}
 pub const ZemplExpression = struct {
-    expr: ZigNode, // Zig expression AST node
+    expr: []const u8, // Source text of Zig expression
     location: Location,
 };
 
 /// Code block @{statements}
 pub const ZemplCodeBlock = struct {
-    statements: ZigNode, // Zig statements AST node
+    statements: []const u8, // Source text of Zig statements
     location: Location,
 };
 
@@ -84,7 +81,7 @@ pub const ZemplComponentCall = struct {
 
 /// Argument in a component call
 pub const ZemplArg = struct {
-    expr: ZigNode, // Zig expression for the argument
+    expr: []const u8, // Source text of Zig expression for the argument
     location: Location,
 };
 
@@ -97,7 +94,7 @@ pub const ZemplControlFlow = union(enum) {
 
 /// @if (condition) { then_body } @else { else_body }
 pub const ZemplIf = struct {
-    condition: ZigNode, // Zig expression for condition
+    condition: []const u8, // Source text of Zig expression for condition
     then_body: []HtmlNode,
     else_body: ?[]HtmlNode, // Optional else branch
     location: Location,
@@ -106,7 +103,7 @@ pub const ZemplIf = struct {
 /// @for (item in iterable) { body }
 pub const ZemplFor = struct {
     iterator_var: []const u8, // Variable name like "item"
-    iterable: ZigNode, // Zig expression for iterable
+    iterable: []const u8, // Source text of Zig expression for iterable
     body: []HtmlNode,
     location: Location,
 };
@@ -114,7 +111,7 @@ pub const ZemplFor = struct {
 /// @while (condition) { body }
 /// @while (condition) { body } or @while (condition) |capture| { body }
 pub const ZemplWhile = struct {
-    condition: ZigNode, // Zig expression for condition
+    condition: []const u8, // Source text of Zig expression for condition
     capture: ?[]const u8, // Optional capture variable name (e.g., "item" in |item|)
     body: []HtmlNode,
     location: Location,
@@ -122,7 +119,7 @@ pub const ZemplWhile = struct {
 
 /// Top-level item in a zempl file (either a Zig declaration or a zempl component)
 pub const ZemplItem = union(enum) {
-    declaration: ZigNode, // Zig const/var/fn declaration
+    declaration: []const u8, // Source text of Zig const/var/fn declaration
     component: ZemplComponent,
 };
 
