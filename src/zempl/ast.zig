@@ -13,13 +13,9 @@ pub const HtmlElement = struct {
 /// HTML attribute (name=value)
 pub const HtmlAttribute = struct {
     name: []const u8,
-    value: HtmlAttributeValue,
+    value: []const u8, // Source text of Zig expression
     location: Location,
 };
-
-/// Value of an HTML attribute - source text of a Zig expression
-/// The expression has been validated by the Zig parser
-pub const HtmlAttributeValue = []const u8;
 
 /// HTML text content node
 pub const HtmlText = struct {
