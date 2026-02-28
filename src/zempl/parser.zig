@@ -96,7 +96,10 @@ pub const Parser = struct {
         const start_pos = self.lexer.getPosition();
         const source_slice: [:0]const u8 = self.lexer.source[start_pos.. :0];
 
-        const params_result = try zig_parse.parseParamDeclList(self.allocator, source_slice) orelse return error.ExpectedParamList;
+        const params_result = zig_parse.parseParamDeclList(self.allocator, source_slice) catch |err| switch (err) {
+            error.ParseError => return error.ExpectedParamList,
+            else => |e| return e,
+        };
         // Note: params_result.source_text ownership is transferred to the component
         // and will be freed in deinitComponent
 

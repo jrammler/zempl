@@ -75,7 +75,8 @@ pub fn parseExpression(allocator: std.mem.Allocator, source: [:0]const u8) !Pars
 
 /// Parse a parameter declaration list (e.g., `(a: i32, b: u32)`) and return source text + consumed length.
 /// This is used to parse zempl component parameter lists.
-pub fn parseParamDeclList(allocator: std.mem.Allocator, source: [:0]const u8) !?ParseResult {
+/// Returns an error if the source doesn't start with '(' or if the param list is malformed.
+pub fn parseParamDeclList(allocator: std.mem.Allocator, source: [:0]const u8) !ParseResult {
     var tokens = Ast.TokenList{};
     defer tokens.deinit(allocator);
 
@@ -110,7 +111,7 @@ pub fn parseParamDeclList(allocator: std.mem.Allocator, source: [:0]const u8) !?
 
     // Check if it starts with l_paren
     if (parse.tokenTag(parse.tok_i) != .l_paren) {
-        return null;
+        return error.ParseError;
     }
 
     _ = try parse.parseParamDeclList();
@@ -253,38 +254,36 @@ test "parseExpression returns source text for function call" {
 test "parseParamDeclList returns source text for empty params" {
     const source = "()";
     const result = try parseParamDeclList(std.testing.allocator, source);
-    try std.testing.expect(result != null);
-    if (result) |r| {
-        defer std.testing.allocator.free(r.source_text);
-        try std.testing.expectEqualStrings("()", r.source_text);
-        try std.testing.expectEqual(@as(usize, 2), r.consumed);
-    }
+    defer std.testing.allocator.free(result.source_text);
+    try std.testing.expectEqualStrings("()", result.source_text);
+    try std.testing.expectEqual(@as(usize, 2), result.consumed);
 }
 
 test "parseParamDeclList returns source text for single param" {
     const source = "(x: i32)";
     const result = try parseParamDeclList(std.testing.allocator, source);
-    try std.testing.expect(result != null);
-    if (result) |r| {
-        defer std.testing.allocator.free(r.source_text);
-        try std.testing.expectEqualStrings("(x: i32)", r.source_text);
-    }
+    defer std.testing.allocator.free(result.source_text);
+    try std.testing.expectEqualStrings("(x: i32)", result.source_text);
 }
 
 test "parseParamDeclList returns source text for multiple params" {
     const source = "(a: i32, b: []const u8)";
     const result = try parseParamDeclList(std.testing.allocator, source);
-    try std.testing.expect(result != null);
-    if (result) |r| {
-        defer std.testing.allocator.free(r.source_text);
-        try std.testing.expectEqualStrings("(a: i32, b: []const u8)", r.source_text);
-    }
+    defer std.testing.allocator.free(result.source_text);
+    try std.testing.expectEqualStrings("(a: i32, b: []const u8)", result.source_text);
 }
 
-test "parseParamDeclList returns null if not starting with l_paren" {
+test "parseParamDeclList returns error if not starting with l_paren" {
     const source = "i32";
-    const result = try parseParamDeclList(std.testing.allocator, source);
-    try std.testing.expect(result == null);
+    const result = parseParamDeclList(std.testing.allocator, source);
+    try std.testing.expectError(error.ParseError, result);
+}
+
+test "parseParamDeclList returns error for invalid param list" {
+    const source = "(invalid";
+    const result = parseParamDeclList(std.testing.allocator, source);
+    // Should return an error since it starts with ( but is malformed
+    try std.testing.expectError(error.ParseError, result);
 }
 
 test "parseTopLevelItem returns source text for const declaration" {
