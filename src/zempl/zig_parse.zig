@@ -3,16 +3,25 @@ const Parse = @import("zig/Parse.zig");
 const Ast = std.zig.Ast;
 const Tokenizer = std.zig.Tokenizer;
 
+pub const Error = error{
+    ParseError,
+    OutOfMemory,
+};
+
 /// Result from parsing - contains the source text and bytes consumed
 pub const ParseResult = struct {
     source_text: []const u8, // Duplicated source, caller must free
     consumed: usize, // How many bytes were consumed from input
+
+    pub fn deinit(self: ParseResult, allocator: std.mem.Allocator) void {
+        allocator.free(self.source_text);
+    }
 };
 
 /// Parse a Zig expression and return its source text + consumed length.
 /// Validates syntax then extracts the original source text.
 /// Caller must free result.source_text.
-pub fn parseExpression(allocator: std.mem.Allocator, source: [:0]const u8) !ParseResult {
+pub fn parseExpression(allocator: std.mem.Allocator, source: [:0]const u8) Error!ParseResult {
     // Tokenize
     var tokens = Ast.TokenList{};
     defer tokens.deinit(allocator);
@@ -76,7 +85,7 @@ pub fn parseExpression(allocator: std.mem.Allocator, source: [:0]const u8) !Pars
 /// Parse a parameter declaration list (e.g., `(a: i32, b: u32)`) and return source text + consumed length.
 /// This is used to parse zempl component parameter lists.
 /// Returns an error if the source doesn't start with '(' or if the param list is malformed.
-pub fn parseParamDeclList(allocator: std.mem.Allocator, source: [:0]const u8) !ParseResult {
+pub fn parseParamDeclList(allocator: std.mem.Allocator, source: [:0]const u8) Error!ParseResult {
     var tokens = Ast.TokenList{};
     defer tokens.deinit(allocator);
 
@@ -129,7 +138,7 @@ pub fn parseParamDeclList(allocator: std.mem.Allocator, source: [:0]const u8) !P
 }
 
 /// Parse a top-level declaration (const, var, fn) and return source text + consumed length.
-pub fn parseTopLevelItem(allocator: std.mem.Allocator, source: [:0]const u8) !?ParseResult {
+pub fn parseTopLevelItem(allocator: std.mem.Allocator, source: [:0]const u8) Error!?ParseResult {
     var tokens = Ast.TokenList{};
     defer tokens.deinit(allocator);
 

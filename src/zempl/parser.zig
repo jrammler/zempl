@@ -9,8 +9,8 @@ const ZemplArg = @import("ast.zig").ZemplArg;
 const Lexer = @import("lexer.zig").Lexer;
 const Token = @import("lexer.zig").Token;
 const TokenType = @import("lexer.zig").TokenType;
-const zig_parse = @import("zig_parse.zig");
 const Location = @import("error.zig").Location;
+const zig_parse = @import("zig_parse.zig");
 
 /// Parser errors
 pub const ParserError = error{
@@ -26,12 +26,13 @@ pub const ParserError = error{
     ExpectedRAngle,
     ExpectedAttributeName,
     ExpectedExpression,
+    ExpectedTopLevelItem,
     UnclosedComment,
     ExpectedLParen,
-    ExpectedIterator,
-    ExpectedIn,
+    ExpectedRParen,
+    ExpectedPipe,
+    ExpectedIdentifier,
     UnknownZemplConstruct,
-    UnexpectedToken,
     OutOfMemory,
 };
 
@@ -67,24 +68,10 @@ pub const Parser = struct {
         }
 
         // Parse top-level items until EOF
-        while (true) {
-            const start_pos = self.lexer.getPosition();
-            const token = self.lexer.peek();
-
-            if (token.token_type == .eof) break;
-
-            // Try to parse as Zig top-level item first
-            const source_slice: [:0]const u8 = self.lexer.source[start_pos.. :0];
-
-            const parse_result = zig_parse.parseTopLevelItem(self.allocator, source_slice) catch {
-                return error.UnexpectedToken;
-            };
-            if (parse_result) |result| {
-                // Found a valid Zig declaration
-                try items.append(self.allocator, .{ .declaration = result.source_text });
-
-                // Advance lexer by consumed bytes
-                self.lexer.advanceBy(result.consumed);
+        while (self.lexer.peek().token_type != .eof) {
+            const topLevelItem = try self.parseTopLevelItem();
+            if (topLevelItem) |item| {
+                try items.append(self.allocator, .{ .declaration = item });
             } else {
                 // Not a Zig declaration, try parsing as zempl component
                 const component = try self.parseZemplComponent();
@@ -102,7 +89,48 @@ pub const Parser = struct {
         };
     }
 
-    /// Parse a Zig declaration from current position
+    fn parseTopLevelItem(self: *Parser) ParserError!?[]const u8 {
+        const start_pos = self.lexer.getPosition();
+        const source_slice = self.lexer.source[start_pos..];
+
+        const parse_result = zig_parse.parseTopLevelItem(self.allocator, source_slice) catch |err| switch (err) {
+            error.ParseError => return error.ExpectedTopLevelItem,
+            else => |e| return e,
+        };
+
+        if (parse_result) |result| {
+            self.lexer.advanceBy(result.consumed);
+            return result.source_text;
+        }
+        return null;
+    }
+
+    fn parseExpression(self: *Parser) ParserError![]const u8 {
+        const start_pos = self.lexer.getPosition();
+        const source_slice = self.lexer.source[start_pos..];
+
+        const parse_result = zig_parse.parseExpression(self.allocator, source_slice) catch |err| switch (err) {
+            error.ParseError => return error.ExpectedExpression,
+            else => |e| return e,
+        };
+
+        self.lexer.advanceBy(parse_result.consumed);
+        return parse_result.source_text;
+    }
+
+    fn parseParamDeclList(self: *Parser) ParserError![]const u8 {
+        const start_pos = self.lexer.getPosition();
+        const source_slice = self.lexer.source[start_pos..];
+
+        const parse_result = zig_parse.parseParamDeclList(self.allocator, source_slice) catch |err| switch (err) {
+            error.ParseError => return error.ExpectedParamList,
+            else => |e| return e,
+        };
+
+        self.lexer.advanceBy(parse_result.consumed);
+        return parse_result.source_text;
+    }
+
     /// Parse a zempl component definition
     /// Handles both "zempl Name() {}" and "pub zempl Name() {}"
     fn parseZemplComponent(self: *Parser) ParserError!ZemplComponent {
@@ -116,7 +144,10 @@ pub const Parser = struct {
 
         // Expect zempl keyword
         const zempl_token = self.lexer.next();
-        if (zempl_token.token_type != .zempl_keyword) {
+        if (zempl_token.token_type != .identifier) {
+            return error.ExpectedZemplKeyword;
+        }
+        if (!std.mem.eql(u8, zempl_token.text, "zempl")) {
             return error.ExpectedZemplKeyword;
         }
 
@@ -128,18 +159,8 @@ pub const Parser = struct {
         const name = try self.allocator.dupe(u8, name_token.text);
         errdefer self.allocator.free(name);
 
-        // Parse parameter list using zig_parse
-        const start_pos = self.lexer.getPosition();
-        const source_slice: [:0]const u8 = self.lexer.source[start_pos.. :0];
-
-        const params_result = zig_parse.parseParamDeclList(self.allocator, source_slice) catch |err| switch (err) {
-            error.ParseError => return error.ExpectedParamList,
-            else => |e| return e,
-        };
-        errdefer self.allocator.free(params_result.source_text);
-
-        // Advance lexer by consumed bytes
-        self.lexer.advanceBy(params_result.consumed);
+        const params = try self.parseParamDeclList();
+        errdefer self.allocator.free(params);
 
         // Parse body (HTML content) - expects opening brace internally
         const body = try self.parseHtmlBody();
@@ -147,7 +168,7 @@ pub const Parser = struct {
         return ZemplComponent{
             .name = name,
             .is_public = is_public,
-            .params = params_result.source_text,
+            .params = params,
             .body = body,
             .location = name_token.location,
         };
@@ -173,12 +194,11 @@ pub const Parser = struct {
         // Parse content until closing brace
         while (true) {
             const token = self.lexer.peek();
-            switch (token.token_type) {
+            token: switch (token.token_type) {
                 .rbrace => {
                     _ = self.lexer.next(); // consume the brace
                     break;
                 },
-                .eof => return error.UnexpectedEof,
                 .langle => {
                     const node = try self.parseHtmlElementOrComment();
                     try nodes.append(self.allocator, node);
@@ -187,14 +207,16 @@ pub const Parser = struct {
                     const node = try self.parseExpressionInterpolation();
                     try nodes.append(self.allocator, node);
                 },
+                .at_lbrace => {
+                    const node = try self.parseCodeBlock();
+                    try nodes.append(self.allocator, node);
+                },
                 .identifier => {
                     if (std.mem.startsWith(u8, token.text, "@")) {
                         const node = try self.parseZemplConstruct();
                         try nodes.append(self.allocator, node);
                     } else {
-                        // Regular text that happens to be an identifier
-                        const node = try self.parseTextContent();
-                        try nodes.append(self.allocator, node);
+                        continue :token .text;
                     }
                 },
                 else => {
@@ -209,17 +231,12 @@ pub const Parser = struct {
 
     /// Parse an HTML element, comment, or DOCTYPE
     fn parseHtmlElementOrComment(self: *Parser) ParserError!HtmlNode {
-        _ = self.lexer.next(); // consume '<'
+        const location = self.lexer.next().location; // consume '<'
 
         // Check for comment or DOCTYPE
         const next_token = self.lexer.peek();
-        if (next_token.token_type == .text) {
-            if (std.mem.startsWith(u8, next_token.text, "!--")) {
-                return self.parseComment();
-            }
-            if (std.mem.eql(u8, next_token.text, "!DOCTYPE") or std.mem.eql(u8, next_token.text, "!doctype")) {
-                return self.parseDoctype();
-            }
+        if (next_token.token_type == .bang) {
+            return self.parseDeclaration(location);
         }
 
         // Check for closing tag
@@ -228,95 +245,30 @@ pub const Parser = struct {
             return error.UnexpectedClosingTag;
         }
 
-        // Parse opening tag
-        return self.parseElementStart();
+        // Parse Element
+        return self.parseElement(location);
     }
 
-    /// Parse HTML comment <!-- ... -->
-    fn parseComment(self: *Parser) ParserError!HtmlNode {
-        // Skip past <!--
-        _ = self.lexer.next(); // consume the text token starting with "!--"
+    /// Parse HTML declaration (comment or doctype declaration)
+    fn parseDeclaration(self: *Parser, location: Location) ParserError!HtmlNode {
+        const text_token = self.lexer.nextContent(); // consume the text token
 
-        // Read until -->
-        const content_start = self.lexer.getPosition();
-        var found_end = false;
-
-        while (true) {
-            const token = self.lexer.next();
-            switch (token.token_type) {
-                .text => {
-                    if (std.mem.endsWith(u8, token.text, "--")) {
-                        // Check if next token is >
-                        const next = self.lexer.peek();
-                        if (next.token_type == .rangle) {
-                            _ = self.lexer.next(); // consume >
-                            found_end = true;
-                            break;
-                        }
-                    }
-                },
-                .rangle => {
-                    // Check if previous text ended with --
-                    found_end = true;
-                    break;
-                },
-                .eof => return error.UnexpectedEof,
-                else => {},
-            }
-        }
-
-        if (!found_end) {
+        // Expect >
+        const rangle = self.lexer.next();
+        if (rangle.token_type != .rangle) {
             return error.UnclosedComment;
         }
 
-        const content_end = self.lexer.getPosition();
-        const content = self.lexer.source[content_start..content_end];
-
         return HtmlNode{
-            .comment = .{
-                .content = try self.allocator.dupe(u8, content),
-                .location = .{
-                    .file_path = self.file_path,
-                    .line = 1, // TODO: track line
-                    .column = 1,
-                },
+            .declaration = .{
+                .content = try self.allocator.dupe(u8, text_token.text),
+                .location = location,
             },
         };
     }
 
-    /// Parse DOCTYPE declaration
-    fn parseDoctype(self: *Parser) ParserError!HtmlNode {
-        _ = self.lexer.next(); // consume !DOCTYPE or !doctype
-
-        // Skip whitespace
-        var token = self.lexer.next();
-
-        // Read content until >
-        const start_pos = self.lexer.getPosition();
-
-        while (token.token_type != .rangle and token.token_type != .eof) {
-            token = self.lexer.next();
-        }
-
-        if (token.token_type == .eof) {
-            return error.UnexpectedEof;
-        }
-
-        const end_pos = self.lexer.getPosition();
-        const content = self.lexer.source[start_pos..end_pos];
-
-        return HtmlNode{ .doctype = .{
-            .content = try self.allocator.dupe(u8, content),
-            .location = .{
-                .file_path = self.file_path,
-                .line = 1,
-                .column = 1,
-            },
-        } };
-    }
-
     /// Parse element start tag and its content
-    fn parseElementStart(self: *Parser) ParserError!HtmlNode {
+    fn parseElement(self: *Parser, location: Location) ParserError!HtmlNode {
         // Get tag name
         const tag_token = self.lexer.next();
         if (tag_token.token_type != .identifier) {
@@ -370,7 +322,7 @@ pub const Parser = struct {
                 .attributes = try attributes.toOwnedSlice(self.allocator),
                 .children = &.{},
                 .is_void = true,
-                .location = tag_token.location,
+                .location = location,
             } };
         }
 
@@ -383,64 +335,82 @@ pub const Parser = struct {
             children.deinit(self.allocator);
         }
 
+        // Parse children using nextContent/peekContent
         while (true) {
-            const token = self.lexer.peek();
+            // Peek using nextContent to see what's coming
+            const content_token = self.lexer.peekContent();
 
-            // Check for closing tag
-            if (token.token_type == .langle) {
-                const saved_pos = self.lexer.getPosition();
-                _ = self.lexer.next(); // consume '<'
-                const slash_token = self.lexer.peek();
-                if (slash_token.token_type == .slash) {
-                    _ = self.lexer.next(); // consume '/'
-                    const close_tag_token = self.lexer.next();
-                    if (close_tag_token.token_type == .identifier and
-                        std.mem.eql(u8, close_tag_token.text, tag_name))
-                    {
-                        // Found matching closing tag
-                        const end_rangle = self.lexer.next();
-                        if (end_rangle.token_type != .rangle) {
-                            return error.ExpectedRAngle;
-                        }
-                        break;
-                    } else {
-                        // Not matching, push back and continue
-                        // For now, treat as nested element
-                        // TODO: handle mismatched tags better
-                    }
-                } else {
-                    // Not a closing tag, parse as element
-                    self.lexer.index = saved_pos; // restore position
-                    const child = try self.parseHtmlElementOrComment();
-                    try children.append(self.allocator, child);
-                    continue;
-                }
+            if (content_token.token_type == .eof) {
+                return error.UnexpectedEof;
             }
 
-            switch (token.token_type) {
-                .eof => return error.UnexpectedEof,
-                .rbrace => return error.UnexpectedRBrace,
-                .langle => {
-                    const child = try self.parseHtmlElementOrComment();
-                    try children.append(self.allocator, child);
-                },
-                .lbrace => {
-                    const child = try self.parseExpressionInterpolation();
-                    try children.append(self.allocator, child);
-                },
-                .identifier => {
-                    if (std.mem.startsWith(u8, token.text, "@")) {
+            // If empty text, we're at a delimiter
+            if (content_token.text.len == 0) {
+                const token = self.lexer.peek();
+
+                // Check for closing tag </tagname>
+                if (token.token_type == .langle) {
+                    const saved_pos = self.lexer.getPosition();
+                    _ = self.lexer.next(); // consume '<'
+                    const slash_token = self.lexer.peek();
+                    if (slash_token.token_type == .slash) {
+                        _ = self.lexer.next(); // consume '/'
+                        const close_tag_token = self.lexer.next();
+                        if (close_tag_token.token_type == .identifier and
+                            std.mem.eql(u8, close_tag_token.text, tag_name))
+                        {
+                            // Found matching closing tag
+                            const end_rangle = self.lexer.next();
+                            if (end_rangle.token_type != .rangle) {
+                                return error.ExpectedRAngle;
+                            }
+                            break;
+                        } else {
+                            // Not matching, restore and parse as element
+                            self.lexer.index = saved_pos;
+                            const child = try self.parseHtmlElementOrComment();
+                            try children.append(self.allocator, child);
+                            continue;
+                        }
+                    } else {
+                        // Not a closing tag, restore and parse as element
+                        self.lexer.index = saved_pos;
+                        const child = try self.parseHtmlElementOrComment();
+                        try children.append(self.allocator, child);
+                        continue;
+                    }
+                }
+
+                switch (token.token_type) {
+                    .rbrace => return error.UnexpectedRBrace,
+                    .langle => {
+                        const child = try self.parseHtmlElementOrComment();
+                        try children.append(self.allocator, child);
+                    },
+                    .lbrace => {
+                        const child = try self.parseExpressionInterpolation();
+                        try children.append(self.allocator, child);
+                    },
+                    .at_lbrace => {
                         const child = try self.parseZemplConstruct();
                         try children.append(self.allocator, child);
-                    } else {
-                        const child = try self.parseTextContent();
-                        try children.append(self.allocator, child);
-                    }
-                },
-                else => {
-                    const child = try self.parseTextContent();
-                    try children.append(self.allocator, child);
-                },
+                    },
+                    .identifier => {
+                        if (std.mem.startsWith(u8, token.text, "@")) {
+                            const child = try self.parseZemplConstruct();
+                            try children.append(self.allocator, child);
+                        } else {
+                            _ = self.lexer.next();
+                        }
+                    },
+                    else => {
+                        _ = self.lexer.next();
+                    },
+                }
+            } else {
+                // We have actual text content
+                const child = try self.parseTextContent();
+                try children.append(self.allocator, child);
             }
         }
 
@@ -449,7 +419,7 @@ pub const Parser = struct {
             .attributes = try attributes.toOwnedSlice(self.allocator),
             .children = try children.toOwnedSlice(self.allocator),
             .is_void = false,
-            .location = tag_token.location,
+            .location = location,
         } };
     }
 
@@ -492,35 +462,19 @@ pub const Parser = struct {
         };
     }
 
-    /// Parse text content until special character
+    /// Parse text content using nextContent
     fn parseTextContent(self: *Parser) ParserError!HtmlNode {
-        const start_pos = self.lexer.getPosition();
-        var end_pos = start_pos;
+        const token = self.lexer.nextContent();
 
-        while (true) {
-            const token = self.lexer.peek();
-            switch (token.token_type) {
-                .langle, .rbrace, .eof, .lbrace => break,
-                .identifier => {
-                    if (std.mem.startsWith(u8, token.text, "@")) break;
-                    _ = self.lexer.next();
-                    end_pos = self.lexer.getPosition();
-                },
-                else => {
-                    _ = self.lexer.next();
-                    end_pos = self.lexer.getPosition();
-                },
-            }
+        if (token.token_type == .eof) {
+            return error.UnexpectedEof;
         }
 
-        const content = self.lexer.source[start_pos..end_pos];
+        std.debug.assert(token.token_type == .text);
+
         return HtmlNode{ .text = .{
-            .content = try self.allocator.dupe(u8, content),
-            .location = .{
-                .file_path = self.file_path,
-                .line = 1,
-                .column = 1,
-            },
+            .content = try self.allocator.dupe(u8, token.text),
+            .location = token.location,
         } };
     }
 
@@ -574,31 +528,18 @@ pub const Parser = struct {
 
     /// Parse @if statement
     fn parseIfStatement(self: *Parser) ParserError!HtmlNode {
-        // Expect (condition)
         const lparen_token = self.lexer.next();
-        if (lparen_token.token_type != .text or !std.mem.eql(u8, lparen_token.text, "(")) {
+        if (lparen_token.token_type != .lparen) {
             return error.ExpectedLParen;
         }
 
-        const cond_start = self.lexer.getPosition();
-
-        // Find matching )
-        var paren_depth: i32 = 1;
-        while (paren_depth > 0) {
-            const token = self.lexer.next();
-            if (token.token_type == .text) {
-                for (token.text) |c| {
-                    if (c == '(') paren_depth += 1;
-                    if (c == ')') paren_depth -= 1;
-                }
-            } else if (token.token_type == .eof) {
-                return error.UnexpectedEof;
-            }
-        }
-
-        const cond_end = self.lexer.getPosition() - 1;
-        const condition = try self.allocator.dupe(u8, self.lexer.source[cond_start..cond_end]);
+        const condition = try self.parseExpression();
         errdefer self.allocator.free(condition);
+
+        const rparen_token = self.lexer.next();
+        if (rparen_token.token_type != .rparen) {
+            return error.ExpectedRParen;
+        }
 
         // Expect { then_body }
         const then_body = try self.parseHtmlBody();
@@ -631,52 +572,60 @@ pub const Parser = struct {
 
     /// Parse @for loop
     fn parseForLoop(self: *Parser) ParserError!HtmlNode {
-        // Parse (iterator in iterable)
-        const lparen_token = self.lexer.next();
-        if (lparen_token.token_type != .text or !std.mem.eql(u8, lparen_token.text, "(")) {
+        if (self.lexer.next().token_type != .lparen) {
             return error.ExpectedLParen;
         }
 
-        // Get iterator variable
-        const iter_token = self.lexer.next();
-        if (iter_token.token_type != .identifier) {
-            return error.ExpectedIterator;
-        }
-        const iterator_var = try self.allocator.dupe(u8, iter_token.text);
-        errdefer self.allocator.free(iterator_var);
-
-        // Expect 'in'
-        const in_token = self.lexer.next();
-        if (in_token.token_type != .identifier or !std.mem.eql(u8, in_token.text, "in")) {
-            return error.ExpectedIn;
-        }
-
-        // Get iterable expression
-        const iterable_start = self.lexer.getPosition();
-
-        var paren_depth: i32 = 1;
-        while (paren_depth > 0) {
-            const token = self.lexer.next();
-            if (token.token_type == .text) {
-                for (token.text) |c| {
-                    if (c == '(') paren_depth += 1;
-                    if (c == ')') paren_depth -= 1;
-                }
-            } else if (token.token_type == .eof) {
-                return error.UnexpectedEof;
+        var iterables = std.ArrayList([]const u8).empty;
+        errdefer {
+            for (iterables.items) |iterable| {
+                self.allocator.free(iterable);
             }
+            iterables.deinit(self.allocator);
         }
 
-        const iterable_end = self.lexer.getPosition() - 1;
-        const iterable = try self.allocator.dupe(u8, self.lexer.source[iterable_start..iterable_end]);
-        errdefer self.allocator.free(iterable);
+        while (true) {
+            const iterable = try self.parseExpression();
+            errdefer self.allocator.free(iterable);
+            try iterables.append(self.allocator, iterable);
+            if (self.lexer.peek().token_type != .comma) break;
+        }
+
+        if (self.lexer.next().token_type != .rparen) {
+            return error.ExpectedRParen;
+        }
+
+        if (self.lexer.next().token_type != .pipe) {
+            return error.ExpectedPipe;
+        }
+
+        var captures = std.ArrayList([]const u8).empty;
+        errdefer {
+            for (captures.items) |capture| {
+                self.allocator.free(capture);
+            }
+            captures.deinit(self.allocator);
+        }
+
+        while (true) {
+            const capture = self.lexer.next();
+            if (capture.token_type != .identifier) {
+                return error.ExpectedIdentifier;
+            }
+            try iterables.append(self.allocator, try self.allocator.dupe(u8, capture.text));
+            if (self.lexer.peek().token_type != .comma) break;
+        }
+
+        if (self.lexer.next().token_type != .pipe) {
+            return error.ExpectedPipe;
+        }
 
         // Parse body
         const body = try self.parseHtmlBody();
 
         return HtmlNode{ .control_flow = .{ .for_loop = .{
-            .iterator_var = iterator_var,
-            .iterable = iterable,
+            .captures = try captures.toOwnedSlice(self.allocator),
+            .iterables = try iterables.toOwnedSlice(self.allocator),
             .body = body,
             .location = .{
                 .file_path = self.file_path,
@@ -688,36 +637,24 @@ pub const Parser = struct {
 
     /// Parse @while loop
     fn parseWhileLoop(self: *Parser) ParserError!HtmlNode {
-        // Parse (condition)
         const lparen_token = self.lexer.next();
-        if (lparen_token.token_type != .text or !std.mem.eql(u8, lparen_token.text, "(")) {
+        if (lparen_token.token_type != .lparen) {
             return error.ExpectedLParen;
         }
 
-        const cond_start = self.lexer.getPosition();
+        const condition = try self.parseExpression();
+        errdefer self.allocator.free(condition);
 
-        var paren_depth: i32 = 1;
-        while (paren_depth > 0) {
-            const token = self.lexer.next();
-            if (token.token_type == .text) {
-                for (token.text) |c| {
-                    if (c == '(') paren_depth += 1;
-                    if (c == ')') paren_depth -= 1;
-                }
-            } else if (token.token_type == .eof) {
-                return error.UnexpectedEof;
-            }
+        const rparen_token = self.lexer.next();
+        if (rparen_token.token_type != .rparen) {
+            return error.ExpectedRParen;
         }
-
-        const cond_end = self.lexer.getPosition() - 1;
-        const condition = try self.allocator.dupe(u8, self.lexer.source[cond_start..cond_end]);
 
         // Parse body
         const body = try self.parseHtmlBody();
 
         return HtmlNode{ .control_flow = .{ .while_loop = .{
             .condition = condition,
-            .capture = null,
             .body = body,
             .location = .{
                 .file_path = self.file_path,
@@ -1059,6 +996,127 @@ test "isVoidElement returns false for non-void tags" {
     try std.testing.expect(!Parser.isVoidElement("span"));
     try std.testing.expect(!Parser.isVoidElement("p"));
     try std.testing.expect(!Parser.isVoidElement("html"));
+}
+
+test "parseComment handles basic comment" {
+    const source = "zempl Test() { <div><!-- comment --></div> }";
+    var lexer = Lexer.init(source, "test.zempl");
+    var parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
+    const file = try parser.parseFile();
+    defer file.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), file.items.len);
+    try std.testing.expect(file.items[0].component.body[0].element.children[0] == .declaration);
+}
+
+test "parseComment handles comment without spaces" {
+    const source = "zempl Test() { <div><!--asdf--></div> }";
+    var lexer = Lexer.init(source, "test.zempl");
+    var parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
+    const file = try parser.parseFile();
+    defer file.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), file.items.len);
+    try std.testing.expect(file.items[0].component.body[0].element.children[0] == .declaration);
+}
+
+test "parseComment handles multiline comment" {
+    const source = "zempl Test() { <div><!-- multi\nline\ncomment --></div> }";
+    var lexer = Lexer.init(source, "test.zempl");
+    var parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
+    const file = try parser.parseFile();
+    defer file.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), file.items.len);
+    try std.testing.expect(file.items[0].component.body[0].element.children[0] == .declaration);
+}
+
+test "parseDoctype handles DOCTYPE html" {
+    const source = "zempl Test() { <!DOCTYPE html><html></html> }";
+    var lexer = Lexer.init(source, "test.zempl");
+    var parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
+    const file = try parser.parseFile();
+    defer file.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), file.items.len);
+    try std.testing.expect(file.items[0].component.body[0] == .declaration);
+}
+
+test "parseDoctype handles lowercase doctype" {
+    const source = "zempl Test() { <!doctype html><html></html> }";
+    var lexer = Lexer.init(source, "test.zempl");
+    var parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
+    const file = try parser.parseFile();
+    defer file.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), file.items.len);
+    try std.testing.expect(file.items[0].component.body[0] == .declaration);
+}
+
+test "parseCodeBlock handles simple code block" {
+    const source = "zempl Test() { <div>@{ const x = 1; }</div> }";
+    var lexer = Lexer.init(source, "test.zempl");
+    var parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
+    const file = try parser.parseFile();
+    defer file.deinit(std.testing.allocator);
+
+    try std.testing.expect(file.items[0].component.body[0].element.children[0] == .code_block);
+    try std.testing.expect(file.items[0].component.body[0].element.children[0].code_block.statements.len > 0);
+}
+
+test "parseCodeBlock handles multiline code block" {
+    const source = "zempl Test() { <div>@{\n  const x = 1;\n  const y = 2;\n}</div> }";
+    var lexer = Lexer.init(source, "test.zempl");
+    var parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
+    const file = try parser.parseFile();
+    defer file.deinit(std.testing.allocator);
+
+    try std.testing.expect(file.items[0].component.body[0].element.children[0] == .code_block);
+}
+
+test "parseZemplConstruct handles @if statement" {
+    const source = "zempl Test() { @if (true) { <span>Yes</span> } }";
+    var lexer = Lexer.init(source, "test.zempl");
+    var parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
+    const file = try parser.parseFile();
+    defer file.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), file.items.len);
+    try std.testing.expect(file.items[0].component.body[0] == .control_flow);
+    try std.testing.expect(file.items[0].component.body[0].control_flow == .if_stmt);
+}
+
+test "parseZemplConstruct handles @if with else" {
+    const source = "zempl Test() { @if (true) { <span>Yes</span> } @else { <span>No</span> } }";
+    var lexer = Lexer.init(source, "test.zempl");
+    var parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
+    const file = try parser.parseFile();
+    defer file.deinit(std.testing.allocator);
+
+    try std.testing.expect(file.items[0].component.body[0] == .control_flow);
+    try std.testing.expect(file.items[0].component.body[0].control_flow.if_stmt.else_body != null);
+}
+
+test "parseZemplConstruct handles @for loop" {
+    const source = "zempl Test() { @for (items) |item| { <li>{item}</li> } }";
+    var lexer = Lexer.init(source, "test.zempl");
+    var parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
+    const file = try parser.parseFile();
+    defer file.deinit(std.testing.allocator);
+
+    try std.testing.expect(file.items[0].component.body[0] == .control_flow);
+    try std.testing.expect(file.items[0].component.body[0].control_flow == .for_loop);
+}
+
+test "parseZemplConstruct handles @while loop" {
+    const source = "zempl Test() { @while (true) { <span>Loop</span> } }";
+    var lexer = Lexer.init(source, "test.zempl");
+    var parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
+    const file = try parser.parseFile();
+    defer file.deinit(std.testing.allocator);
+
+    try std.testing.expect(file.items[0].component.body[0] == .control_flow);
+    try std.testing.expect(file.items[0].component.body[0].control_flow == .while_loop);
 }
 
 test "parseExpressionInterpolation handles simple expression" {

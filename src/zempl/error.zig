@@ -14,19 +14,8 @@ pub const Location = struct {
     }
 };
 
-/// Base error type for all zempl errors
-pub const ZemplError = error{
-    SyntaxError,
-    ZigParseError,
-    HtmlParseError,
-    IoError,
-};
-
 /// Detailed error information with context
 pub const Error = struct {
-    /// The type of error
-    err_type: ZemplError,
-
     /// Where the error occurred
     location: Location,
 
@@ -40,12 +29,10 @@ pub const Error = struct {
     suggestion: ?[]const u8,
 
     pub fn init(
-        err_type: ZemplError,
         location: Location,
         message: []const u8,
     ) Error {
         return .{
-            .err_type = err_type,
             .location = location,
             .message = message,
             .context = null,
@@ -55,7 +42,6 @@ pub const Error = struct {
 
     pub fn withContext(self: Error, ctx: []const u8) Error {
         return .{
-            .err_type = self.err_type,
             .location = self.location,
             .message = self.message,
             .context = ctx,
@@ -65,7 +51,6 @@ pub const Error = struct {
 
     pub fn withSuggestion(self: Error, suggestion: []const u8) Error {
         return .{
-            .err_type = self.err_type,
             .location = self.location,
             .message = self.message,
             .context = self.context,
@@ -77,17 +62,7 @@ pub const Error = struct {
         self: Error,
         writer: anytype,
     ) !void {
-        const err_name = switch (self.err_type) {
-            ZemplError.SyntaxError => "syntax error",
-            ZemplError.ZigParseError => "Zig parse error",
-            ZemplError.HtmlParseError => "HTML parse error",
-            ZemplError.IoError => "I/O error",
-        };
-
-        try writer.print("error: {s}\n", .{err_name});
-        try writer.print("  ├─ {f}\n", .{self.location});
-        try writer.print("  │\n", .{});
-        try writer.print("  │ {s}\n", .{self.message});
+        try writer.print("{f}:error: {s}\n", .{self.location, self.message});
 
         if (self.context) |ctx| {
             try writer.print("  │\n", .{});
@@ -151,12 +126,10 @@ test "Error initialization" {
     };
 
     const err = Error.init(
-        ZemplError.SyntaxError,
         loc,
         "unexpected token",
     );
 
-    try std.testing.expectEqual(ZemplError.SyntaxError, err.err_type);
     try std.testing.expectEqualStrings("test.zempl", err.location.file_path);
     try std.testing.expectEqual(10, err.location.line);
     try std.testing.expectEqual(5, err.location.column);
@@ -171,7 +144,6 @@ test "Error with context and suggestion" {
     };
 
     var err = Error.init(
-        ZemplError.ZigParseError,
         loc,
         "invalid syntax",
     );
@@ -188,12 +160,12 @@ test "ErrorReporter" {
     var reporter = ErrorReporter.init(allocator);
     defer reporter.deinit();
 
-    const err1 = Error.init(ZemplError.SyntaxError, .{
+    const err1 = Error.init(.{
         .file_path = "file1.zempl",
         .line = 1,
         .column = 1,
     }, "error 1");
-    const err2 = Error.init(ZemplError.IoError, .{
+    const err2 = Error.init(.{
         .file_path = "file2.zempl",
         .line = 5,
         .column = 10,

@@ -45,21 +45,11 @@ pub const HtmlText = struct {
 };
 
 /// HTML comment node (<!-- -->)
-pub const HtmlComment = struct {
+pub const HtmlDeclaration = struct {
     content: []const u8,
     location: Location,
 
-    pub fn deinit(self: HtmlComment, allocator: std.mem.Allocator) void {
-        allocator.free(self.content);
-    }
-};
-
-/// DOCTYPE declaration
-pub const HtmlDoctype = struct {
-    content: []const u8, // Usually "html" for <!DOCTYPE html>
-    location: Location,
-
-    pub fn deinit(self: HtmlDoctype, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: HtmlDeclaration, allocator: std.mem.Allocator) void {
         allocator.free(self.content);
     }
 };
@@ -68,8 +58,7 @@ pub const HtmlDoctype = struct {
 pub const HtmlNode = union(enum) {
     element: HtmlElement,
     text: HtmlText,
-    comment: HtmlComment,
-    doctype: HtmlDoctype,
+    declaration: HtmlDeclaration,
     expression: ZemplExpression, // {expr} inside HTML
     code_block: ZemplCodeBlock, // @{...} inside HTML
     control_flow: ZemplControlFlow, // @if, @for, @while inside HTML
@@ -79,8 +68,7 @@ pub const HtmlNode = union(enum) {
         switch (self.*) {
             .element => |elem| elem.deinit(allocator),
             .text => |text| text.deinit(allocator),
-            .comment => |comment| comment.deinit(allocator),
-            .doctype => |doctype| doctype.deinit(allocator),
+            .declaration => |decl| decl.deinit(allocator),
             .expression => |expr| expr.deinit(allocator),
             .code_block => |block| block.deinit(allocator),
             .control_flow => |*ctrl| ctrl.deinit(allocator),
@@ -191,14 +179,20 @@ pub const ZemplIf = struct {
 
 /// @for (item in iterable) { body }
 pub const ZemplFor = struct {
-    iterator_var: []const u8, // Variable name like "item"
-    iterable: []const u8, // Source text of Zig expression for iterable
+    captures: [][]const u8, // Variable name like "item"
+    iterables: [][]const u8, // Source text of Zig expression for iterable
     body: []HtmlNode,
     location: Location,
 
     pub fn deinit(self: *ZemplFor, allocator: std.mem.Allocator) void {
-        allocator.free(self.iterator_var);
-        allocator.free(self.iterable);
+        for (self.captures) |capture| {
+            allocator.free(capture);
+        }
+        allocator.free(self.captures);
+        for (self.iterables) |iterable| {
+            allocator.free(iterable);
+        }
+        allocator.free(self.iterables);
         for (self.body) |*node| {
             node.deinit(allocator);
         }
@@ -210,15 +204,11 @@ pub const ZemplFor = struct {
 /// @while (condition) { body } or @while (condition) |capture| { body }
 pub const ZemplWhile = struct {
     condition: []const u8, // Source text of Zig expression for condition
-    capture: ?[]const u8, // Optional capture variable name (e.g., "item" in |item|)
     body: []HtmlNode,
     location: Location,
 
     pub fn deinit(self: *ZemplWhile, allocator: std.mem.Allocator) void {
         allocator.free(self.condition);
-        if (self.capture) |capture| {
-            allocator.free(capture);
-        }
         for (self.body) |*node| {
             node.deinit(allocator);
         }

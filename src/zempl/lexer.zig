@@ -12,16 +12,20 @@ pub const TokenType = enum {
     text,
 
     // Zempl-specific keywords and symbols
-    zempl_keyword,
     at_lbrace, // @{ - code block start
     lbrace, // { - expression interpolation start
     rbrace, // } - expression interpolation end
+    lparen, // (
+    rparen, // )
+    pipe, // |
+    comma, // ,
 
     // HTML tokens
     langle, // <
     rangle, // >
     slash, // / (used in end tags </ and self-closing />)
     equal, // =
+    bang, // ! (used for comments and doctype declarations)
 };
 
 /// A token with its type, location in source, and text content
@@ -119,7 +123,7 @@ pub const Lexer = struct {
     fn skipWhitespace(self: *Lexer) void {
         while (true) {
             const ch = self.peekChar() orelse break;
-            if (ch == ' ' or ch == '\t' or ch == '\n' or ch == '\r') {
+            if (std.ascii.isWhitespace(ch)) {
                 _ = self.advance();
             } else {
                 break;
@@ -156,41 +160,7 @@ pub const Lexer = struct {
         }
 
         const text = self.source[start..self.index];
-
-        // Check for keywords
-        if (std.mem.eql(u8, text, "zempl")) {
-            return Token.init(.zempl_keyword, location, text);
-        }
-
         return Token.init(.identifier, location, text);
-    }
-
-    /// Scan text content until we hit a special character
-    fn scanText(self: *Lexer) Token {
-        const location = self.getLocation();
-        const start = self.index;
-
-        while (true) {
-            const ch = self.peekChar() orelse break;
-
-            // Check for special characters that end text content
-            if (ch == '<') {
-                // Check for </ (end tag)
-                if (self.peekCharAhead(1) == '/') {
-                    break;
-                }
-                break;
-            }
-
-            if (ch == '{' or ch == '@') {
-                break;
-            }
-
-            _ = self.advance();
-        }
-
-        const text = self.source[start..self.index];
-        return Token.init(.text, location, text);
     }
 
     /// Get next token (general purpose - for tags, attributes, etc.)
@@ -239,6 +209,31 @@ pub const Lexer = struct {
             return Token.init(.rbrace, location, "}");
         }
 
+        if (c == '(') {
+            _ = self.advance();
+            return Token.init(.lparen, location, "(");
+        }
+
+        if (c == ')') {
+            _ = self.advance();
+            return Token.init(.rparen, location, ")");
+        }
+
+        if (c == '|') {
+            _ = self.advance();
+            return Token.init(.pipe, location, "|");
+        }
+
+        if (c == ',') {
+            _ = self.advance();
+            return Token.init(.comma, location, ",");
+        }
+
+        if (c == '!') {
+            _ = self.advance();
+            return Token.init(.bang, location, "!");
+        }
+
         // Check for @{
         if (c == '@') {
             if (self.peekCharAhead(1) == '{') {
@@ -260,31 +255,25 @@ pub const Lexer = struct {
         return Token.init(.invalid, location, self.source[start..self.index]);
     }
 
-    /// Get next token in content context (returns text until special char)
-    /// Only returns .text or .eof tokens. When a special char is encountered,
-    /// returns empty text token (length 0) to indicate delimiter.
     pub fn nextContent(self: *Lexer) Token {
         self.skipWhitespace();
-
         const location = self.getLocation();
-        const ch = self.peekChar();
-
-        if (ch == null) {
+        const start = self.index;
+        if (start == self.source.len) {
             return Token.init(.eof, location, "");
         }
-
-        const c = ch.?;
-
-        // If we're at a special character, return empty text to indicate delimiter
-        if (c == '<' or c == '{' or c == '@') {
-            return Token.init(.text, location, "");
+        while (self.peekChar()) |ch| {
+            switch (ch) {
+                '<', '>', '{', '}', '@' => break,
+                else => {},
+            }
+            _ = self.advance();
         }
-
-        // Otherwise scan text content
-        return self.scanText();
+        var text = self.source[start..self.index];
+        text = std.mem.trimEnd(u8, text, &std.ascii.whitespace);
+        return Token.init(.text, location, text);
     }
 
-    /// Look at next token without consuming (uses next() method)
     pub fn peek(self: *Lexer) Token {
         const saved_index = self.index;
         const saved_line = self.line;
@@ -296,7 +285,6 @@ pub const Lexer = struct {
         return token;
     }
 
-    /// Look at next content token without consuming (uses nextContent() method)
     pub fn peekContent(self: *Lexer) Token {
         const saved_index = self.index;
         const saved_line = self.line;
@@ -332,15 +320,6 @@ test "Identifier token" {
     const token = lexer.next();
     try std.testing.expectEqual(TokenType.identifier, token.token_type);
     try std.testing.expectEqualStrings("div", token.text);
-}
-
-test "Zempl keyword" {
-    const source = "zempl";
-    var lexer = Lexer.init(source, "test.zempl");
-
-    const token = lexer.next();
-    try std.testing.expectEqual(TokenType.zempl_keyword, token.token_type);
-    try std.testing.expectEqualStrings("zempl", token.text);
 }
 
 test "Identifier with @" {
@@ -439,7 +418,7 @@ test "Text content stops at special char" {
     // First call returns text until <
     var token = lexer.nextContent();
     try std.testing.expectEqual(TokenType.text, token.token_type);
-    try std.testing.expectEqualStrings("Hello ", token.text);
+    try std.testing.expectEqualStrings("Hello", token.text);
 
     // At <, returns empty text to indicate delimiter
     token = lexer.nextContent();
@@ -453,7 +432,7 @@ test "Text content with interpolation" {
 
     var token = lexer.nextContent();
     try std.testing.expectEqual(TokenType.text, token.token_type);
-    try std.testing.expectEqualStrings("Hello ", token.text);
+    try std.testing.expectEqualStrings("Hello", token.text);
 
     // At {, returns empty text to indicate delimiter
     token = lexer.nextContent();
@@ -565,7 +544,7 @@ test "nextContent returns text until <" {
 
     var token = lexer.nextContent();
     try std.testing.expectEqual(TokenType.text, token.token_type);
-    try std.testing.expectEqualStrings("Hello ", token.text);
+    try std.testing.expectEqualStrings("Hello", token.text);
 
     // At <, returns empty text to indicate delimiter
     token = lexer.nextContent();
@@ -579,7 +558,7 @@ test "nextContent returns text until {" {
 
     var token = lexer.nextContent();
     try std.testing.expectEqual(TokenType.text, token.token_type);
-    try std.testing.expectEqualStrings("Hello ", token.text);
+    try std.testing.expectEqualStrings("Hello", token.text);
 
     // At {, returns empty text to indicate delimiter
     token = lexer.nextContent();
@@ -593,7 +572,7 @@ test "nextContent returns text until @identifier" {
 
     var token = lexer.nextContent();
     try std.testing.expectEqual(TokenType.text, token.token_type);
-    try std.testing.expectEqualStrings("Hello ", token.text);
+    try std.testing.expectEqualStrings("Hello", token.text);
 
     // At @, returns empty text to indicate delimiter
     token = lexer.nextContent();
@@ -607,7 +586,7 @@ test "nextContent returns @ as empty text token" {
 
     var token = lexer.nextContent();
     try std.testing.expectEqual(TokenType.text, token.token_type);
-    try std.testing.expectEqualStrings("Hello ", token.text);
+    try std.testing.expectEqualStrings("Hello", token.text);
 
     // At @, returns empty text to indicate delimiter
     token = lexer.nextContent();
@@ -692,7 +671,7 @@ test "nextContent handles text before HTML comment" {
 
     var token = lexer.nextContent();
     try std.testing.expectEqual(TokenType.text, token.token_type);
-    try std.testing.expectEqualStrings("Text ", token.text);
+    try std.testing.expectEqualStrings("Text", token.text);
 
     // At <, returns empty text
     token = lexer.nextContent();
@@ -707,7 +686,7 @@ test "nextContent sequences correctly through mixed content" {
     // Hello␣ (text until <)
     var token = lexer.nextContent();
     try std.testing.expectEqual(TokenType.text, token.token_type);
-    try std.testing.expectEqualStrings("Hello ", token.text);
+    try std.testing.expectEqualStrings("Hello", token.text);
 
     // At <, returns empty text (caller must use next() to consume)
     token = lexer.nextContent();
@@ -758,17 +737,17 @@ test "peekContent does not advance lexer" {
     // peekContent should return the same as nextContent but not advance
     const peek1 = lexer.peekContent();
     try std.testing.expectEqual(TokenType.text, peek1.token_type);
-    try std.testing.expectEqualStrings("Hello ", peek1.text);
+    try std.testing.expectEqualStrings("Hello", peek1.text);
 
     // Position should be unchanged
     const peek2 = lexer.peekContent();
     try std.testing.expectEqual(TokenType.text, peek2.token_type);
-    try std.testing.expectEqualStrings("Hello ", peek2.text);
+    try std.testing.expectEqualStrings("Hello", peek2.text);
 
     // Now actually consume it
     const token = lexer.nextContent();
     try std.testing.expectEqual(TokenType.text, token.token_type);
-    try std.testing.expectEqualStrings("Hello ", token.text);
+    try std.testing.expectEqualStrings("Hello", token.text);
 
     // Next should be empty text (delimiter at <)
     const peek3 = lexer.peekContent();
