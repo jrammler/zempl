@@ -41,7 +41,7 @@ pub fn parseExpression(allocator: std.mem.Allocator, source: [:0]const u8) !Pars
         .scratch = .{},
     };
 
-    _ = try parse.parseExpr();
+    if ((try parse.parseExpr()) == null) return error.ParseError;
 
     // Get how many tokens were consumed
     const final_tok_i = parse.tok_i;
@@ -101,7 +101,7 @@ pub fn parseTypeExpr(allocator: std.mem.Allocator, source: [:0]const u8) !ParseR
         .scratch = .{},
     };
 
-    _ = try parse.parseTypeExpr();
+    if ((try parse.parseTypeExpr()) == null) return error.ParseError;
 
     const final_tok_i = parse.tok_i;
     const start: u32 = 0;
