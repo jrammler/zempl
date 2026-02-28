@@ -77,7 +77,16 @@ pub const Parser = struct {
 
     /// Parse a Zig declaration from current position
     /// Parse a zempl component definition
+    /// Handles both "zempl Name() {}" and "pub zempl Name() {}"
     fn parseZemplComponent(self: *Parser) !ZemplComponent {
+        // Check for optional 'pub' keyword
+        var is_public = false;
+        const first_token = self.lexer.peek();
+        if (first_token.token_type == .identifier and std.mem.eql(u8, first_token.text, "pub")) {
+            _ = self.lexer.next(); // consume 'pub'
+            is_public = true;
+        }
+
         // Expect zempl keyword
         const zempl_token = self.lexer.next();
         if (zempl_token.token_type != .zempl_keyword) {
@@ -110,7 +119,7 @@ pub const Parser = struct {
 
         return ZemplComponent{
             .name = name,
-            .is_public = false, // TODO: handle pub zempl
+            .is_public = is_public,
             .params = params_result.source_text,
             .body = body,
             .location = name_token.location,
@@ -309,6 +318,27 @@ test "parser handles zempl component with params" {
     try std.testing.expect(file.items[0] == .component);
     try std.testing.expectEqualStrings("Greeting", file.items[0].component.name);
     try std.testing.expectEqualStrings("(name: []const u8)", file.items[0].component.params);
+}
+
+test "parser handles pub zempl component" {
+    const source = "pub zempl PublicComponent() { <div>Public</div> }";
+    var lexer = Lexer.init(source, "test.zempl");
+
+    const parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
+    var mutable_parser = parser;
+    const file = try mutable_parser.parseFile();
+    defer {
+        for (file.items) |*item| {
+            mutable_parser.deinitZemplItem(item);
+        }
+        std.testing.allocator.free(file.items);
+    }
+
+    try std.testing.expectEqual(@as(usize, 1), file.items.len);
+    try std.testing.expect(file.items[0] == .component);
+    try std.testing.expectEqualStrings("PublicComponent", file.items[0].component.name);
+    try std.testing.expect(file.items[0].component.is_public);
+    try std.testing.expectEqualStrings("()", file.items[0].component.params);
 }
 
 test "parser handles multiple declarations" {
