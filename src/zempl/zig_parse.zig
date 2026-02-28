@@ -41,15 +41,13 @@ pub fn parseExpression(allocator: std.mem.Allocator, source: [:0]const u8) !Pars
         .scratch = .{},
     };
 
-    const result = try parse.parseExpr();
-    const node = result orelse return error.ParseError;
+    _ = try parse.parseExpr();
 
     // Get how many tokens were consumed
     const final_tok_i = parse.tok_i;
 
-    // Extract source text using token range
-    const main_token = parse.nodeMainToken(node);
-    const start = parse.tokenStart(main_token);
+    // Start is always 0 since we parse from beginning of source
+    const start: u32 = 0;
 
     // Get the source range - end is where parsing stopped (final_tok_i)
     const end: u32 = if (final_tok_i < tokens_slice.len)
@@ -58,7 +56,9 @@ pub fn parseExpression(allocator: std.mem.Allocator, source: [:0]const u8) !Pars
         @as(u32, @intCast(source.len));
 
     const source_text = source[start..end];
-    const result_str = try allocator.dupe(u8, source_text);
+    // Trim trailing whitespace from the expression
+    const trimmed = std.mem.trim(u8, source_text, &std.ascii.whitespace);
+    const result_str = try allocator.dupe(u8, trimmed);
 
     // Clean up
     parse.nodes.deinit(allocator);
@@ -101,19 +101,18 @@ pub fn parseTypeExpr(allocator: std.mem.Allocator, source: [:0]const u8) !ParseR
         .scratch = .{},
     };
 
-    const result = try parse.parseTypeExpr();
-    const node = result orelse return error.ParseError;
+    _ = try parse.parseTypeExpr();
 
     const final_tok_i = parse.tok_i;
-    const main_token = parse.nodeMainToken(node);
-    const start = parse.tokenStart(main_token);
+    const start: u32 = 0;
     const end: u32 = if (final_tok_i < tokens_slice.len)
         parse.tokenStart(final_tok_i)
     else
         @as(u32, @intCast(source.len));
 
     const source_text = source[start..end];
-    const result_str = try allocator.dupe(u8, source_text);
+    const trimmed = std.mem.trim(u8, source_text, &std.ascii.whitespace);
+    const result_str = try allocator.dupe(u8, trimmed);
 
     parse.nodes.deinit(allocator);
     parse.extra_data.deinit(allocator);
@@ -163,41 +162,40 @@ pub fn parseTopLevelItem(allocator: std.mem.Allocator, source: [:0]const u8) !?P
 
     const tag = parse.tokenTag(parse.tok_i);
 
-    const node: Ast.Node.Index = blk: {
-        switch (tag) {
-            .keyword_const, .keyword_var => break :blk (try parse.parseGlobalVarDecl()) orelse return null,
-            .keyword_fn => break :blk (try parse.parseFnProto()) orelse return null,
-            .keyword_pub => {
-                // Look ahead to see what's after 'pub'
-                const next_tag = parse.tokenTag(parse.tok_i + 1);
-                if (next_tag == .keyword_const or next_tag == .keyword_var) {
-                    _ = parse.nextToken(); // consume 'pub'
-                    break :blk (try parse.parseGlobalVarDecl()) orelse return null;
-                } else if (next_tag == .keyword_fn) {
-                    _ = parse.nextToken(); // consume 'pub'
-                    break :blk (try parse.parseFnProto()) orelse return null;
-                }
+    switch (tag) {
+        .keyword_const, .keyword_var => _ = (try parse.parseGlobalVarDecl()) orelse return null,
+        .keyword_fn => _ = (try parse.parseFnProto()) orelse return null,
+        .keyword_pub => {
+            // Look ahead to see what's after 'pub'
+            const next_tag = parse.tokenTag(parse.tok_i + 1);
+            if (next_tag == .keyword_const or next_tag == .keyword_var) {
+                _ = parse.nextToken(); // consume 'pub'
+                _ = (try parse.parseGlobalVarDecl()) orelse return null;
+            } else if (next_tag == .keyword_fn) {
+                _ = parse.nextToken(); // consume 'pub'
+                _ = (try parse.parseFnProto()) orelse return null;
+            } else {
                 return null;
-            },
-            .eof => return null,
-            else => return null,
-        }
-    };
+            }
+        },
+        .eof => return null,
+        else => return null,
+    }
 
     const final_tok_i = parse.tok_i;
-    const main_token = parse.nodeMainToken(node);
-    const start = parse.tokenStart(main_token);
+    const start: u32 = 0;
     const end: u32 = if (final_tok_i < tokens_slice.len)
         parse.tokenStart(final_tok_i)
     else
         @as(u32, @intCast(source.len));
 
     const source_text = source[start..end];
-    const result_str = try allocator.dupe(u8, source_text);
+    const trimmed = std.mem.trim(u8, source_text, &std.ascii.whitespace);
+    const result_str = try allocator.dupe(u8, trimmed);
 
     return ParseResult{
         .source_text = result_str,
-        .consumed = end - start,
+        .consumed = trimmed.len,
     };
 }
 
