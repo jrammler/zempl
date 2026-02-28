@@ -6,11 +6,12 @@ const HtmlNode = @import("ast.zig").HtmlNode;
 const HtmlElement = @import("ast.zig").HtmlElement;
 const HtmlAttribute = @import("ast.zig").HtmlAttribute;
 const Lexer = @import("lexer.zig").Lexer;
+const Token = @import("lexer.zig").Token;
+const TokenType = @import("lexer.zig").TokenType;
 const zig_parse = @import("zig_parse.zig");
 const Location = @import("error.zig").Location;
 
 /// Parser for zempl files - coordinates lexer, HTML parsing, and expression parsing
-/// Expression parsing is done on-demand using functions from parse.zig
 pub const Parser = struct {
     lexer: *Lexer,
     allocator: std.mem.Allocator,
@@ -41,8 +42,46 @@ pub const Parser = struct {
             items.deinit(self.allocator);
         }
 
-        // TODO: Implement top-level parsing
-        // For now, return empty file
+        // Parse top-level items until EOF
+        while (true) {
+            const token = self.lexer.next();
+
+            switch (token.token_type) {
+                .eof => break,
+                .identifier => {
+                    // Check if it's a top-level declaration or zempl component
+                    if (std.mem.eql(u8, token.text, "const") or
+                        std.mem.eql(u8, token.text, "var") or
+                        std.mem.eql(u8, token.text, "fn") or
+                        std.mem.eql(u8, token.text, "pub"))
+                    {
+                        // Parse Zig declaration
+                        const decl_source = try self.parseDeclaration();
+                        defer self.allocator.free(decl_source);
+
+                        // Validate with zig_parse
+                        const sentinel_source = try self.allocator.dupeZ(u8, decl_source);
+                        defer self.allocator.free(sentinel_source);
+
+                        if (try zig_parse.parseTopLevelItem(self.allocator, sentinel_source)) |result| {
+                            defer self.allocator.free(result.source_text);
+                            try items.append(self.allocator, .{ .declaration = result.source_text });
+                        } else {
+                            return error.InvalidDeclaration;
+                        }
+                    } else if (std.mem.eql(u8, token.text, "zempl")) {
+                        // Parse zempl component
+                        const component = try self.parseZemplComponent();
+                        try items.append(self.allocator, .{ .component = component });
+                    } else {
+                        return error.UnexpectedToken;
+                    }
+                },
+                else => {
+                    return error.UnexpectedToken;
+                },
+            }
+        }
 
         return ZemplFile{
             .items = try items.toOwnedSlice(self.allocator),
@@ -54,12 +93,97 @@ pub const Parser = struct {
         };
     }
 
+    /// Parse a Zig declaration from current position
+    fn parseDeclaration(self: *Parser) ![]const u8 {
+        // Collect tokens until we reach a reasonable stopping point
+        // For now, we'll collect until we hit a semicolon or opening brace
+        var buffer = std.ArrayList(u8).empty;
+        defer buffer.deinit(self.allocator);
+
+        // Go back and re-parse from the start of the declaration
+        // This is a simplified approach - in reality we'd need proper position tracking
+        // For now, just return the token text as a placeholder
+        try buffer.appendSlice(self.allocator, self.lexer.source);
+
+        return buffer.toOwnedSlice(self.allocator);
+    }
+
+    /// Parse a zempl component definition
+    fn parseZemplComponent(self: *Parser) !ZemplComponent {
+        // Expect component name (identifier)
+        const name_token = self.lexer.next();
+        if (name_token.token_type != .identifier) {
+            return error.ExpectedComponentName;
+        }
+        const name = try self.allocator.dupe(u8, name_token.text);
+        errdefer self.allocator.free(name);
+
+        // Expect parameter list (parentheses with content)
+        // For now, just skip to the opening brace
+        var paren_depth: i32 = 0;
+        var found_paren = false;
+
+        while (true) {
+            const token = self.lexer.next();
+            switch (token.token_type) {
+                .lbrace => {
+                    if (paren_depth == 0 and found_paren) {
+                        // We've reached the body opening brace
+                        break;
+                    }
+                },
+                else => {
+                    if (!found_paren and token.token_type == .text and token.text[0] == '(') {
+                        found_paren = true;
+                        paren_depth = 1;
+                    }
+                },
+            }
+        }
+
+        // Parse body (HTML content)
+        const body = try self.parseHtmlBody();
+
+        return ZemplComponent{
+            .name = name,
+            .is_public = false, // TODO: handle pub zempl
+            .params = "", // TODO: parse params properly
+            .body = body,
+            .location = name_token.location,
+        };
+    }
+
+    /// Parse HTML body content
+    fn parseHtmlBody(self: *Parser) ![]HtmlNode {
+        var nodes = std.ArrayList(HtmlNode).empty;
+        errdefer {
+            for (nodes.items) |*node| {
+                self.deinitHtmlNode(node);
+            }
+            nodes.deinit(self.allocator);
+        }
+
+        // TODO: Implement actual HTML parsing
+        // For now, just consume until closing brace
+        while (true) {
+            const token = self.lexer.next();
+            switch (token.token_type) {
+                .rbrace => break,
+                .eof => return error.UnexpectedEof,
+                else => {
+                    // Skip for now
+                },
+            }
+        }
+
+        return nodes.toOwnedSlice(self.allocator);
+    }
+
     /// Helper to deinit a ZemplItem
     fn deinitZemplItem(self: *Parser, item: *ZemplItem) void {
         switch (item.*) {
             .declaration => |decl| {
-                // Declarations are owned by expression parser
-                _ = decl;
+                self.allocator.free(decl);
             },
             .component => |*comp| {
                 self.deinitComponent(comp);
@@ -69,6 +193,8 @@ pub const Parser = struct {
 
     /// Helper to deinit a component
     fn deinitComponent(self: *Parser, comp: *ZemplComponent) void {
+        self.allocator.free(comp.name);
+        self.allocator.free(comp.params);
         for (comp.body) |*node| {
             self.deinitHtmlNode(node);
         }
@@ -81,6 +207,7 @@ pub const Parser = struct {
             .element => |*elem| {
                 for (elem.attributes) |*attr| {
                     self.allocator.free(attr.name);
+                    self.allocator.free(attr.value);
                 }
                 self.allocator.free(elem.attributes);
                 for (elem.children) |*child| {
@@ -98,11 +225,29 @@ pub const Parser = struct {
             .doctype => |*doctype| {
                 self.allocator.free(doctype.content);
             },
-            .expression => {},
-            .code_block => {},
-            .control_flow => {},
-            .component_call => {},
+            .expression => |*expr| {
+                self.allocator.free(expr.expr);
+            },
+            .code_block => |*block| {
+                self.allocator.free(block.statements);
+            },
+            .control_flow => |*ctrl| {
+                self.deinitControlFlow(ctrl);
+            },
+            .component_call => |*call| {
+                self.allocator.free(call.component_name);
+                for (call.args) |*arg| {
+                    self.allocator.free(arg.expr);
+                }
+                self.allocator.free(call.args);
+            },
         }
+    }
+
+    fn deinitControlFlow(self: *Parser, ctrl: anytype) void {
+        _ = self;
+        _ = ctrl;
+        // TODO: Implement control flow cleanup
     }
 };
 
