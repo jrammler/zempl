@@ -41,13 +41,13 @@ pub const Token = struct {
 
 /// Lexer for zempl template files
 pub const Lexer = struct {
-    source: []const u8,
+    source: [:0]const u8,
     file_path: []const u8,
     index: usize,
     line: usize,
     column: usize,
 
-    pub fn init(source: []const u8, file_path: []const u8) Lexer {
+    pub fn init(source: [:0]const u8, file_path: []const u8) Lexer {
         return .{
             .source = source,
             .file_path = file_path,
@@ -69,6 +69,14 @@ pub const Lexer = struct {
             .line = self.line,
             .column = self.column,
         };
+    }
+
+    /// Advance position by count bytes, updating line and column tracking
+    pub fn advanceBy(self: *Lexer, count: usize) void {
+        var remaining: usize = count;
+        while (remaining > 0 and self.index < self.source.len) : (remaining -= 1) {
+            _ = self.advance();
+        }
     }
 
     /// Peek at current character without consuming
@@ -523,14 +531,14 @@ test "Line and column tracking" {
 test "HTML tag with dash" {
     const source = "<my-custom-element>content</my-custom-element>";
     var lexer = Lexer.init(source, "test.zempl");
-    
+
     var token = lexer.next();
     try std.testing.expectEqual(TokenType.langle, token.token_type);
-    
+
     token = lexer.next();
     try std.testing.expectEqual(TokenType.identifier, token.token_type);
     try std.testing.expectEqualStrings("my-custom-element", token.text);
-    
+
     token = lexer.next();
     try std.testing.expectEqual(TokenType.rangle, token.token_type);
 }
@@ -538,7 +546,7 @@ test "HTML tag with dash" {
 test "Attribute with dash" {
     const source = "data-value";
     var lexer = Lexer.init(source, "test.zempl");
-    
+
     const token = lexer.next();
     try std.testing.expectEqual(TokenType.identifier, token.token_type);
     try std.testing.expectEqualStrings("data-value", token.text);

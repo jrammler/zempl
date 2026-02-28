@@ -45,43 +45,29 @@ pub const Parser = struct {
         // Parse top-level items until EOF
         while (true) {
             const start_pos = self.lexer.getPosition();
-            const token = self.lexer.next();
+            const token = self.lexer.peek();
 
-            switch (token.token_type) {
-                .eof => break,
-                .identifier => {
-                    // Check if it's a top-level declaration
-                    if (std.mem.eql(u8, token.text, "const") or
-                        std.mem.eql(u8, token.text, "var") or
-                        std.mem.eql(u8, token.text, "fn") or
-                        std.mem.eql(u8, token.text, "pub"))
-                    {
-                        // Parse Zig declaration
-                        const decl_source = try self.parseDeclaration(start_pos);
-                        defer self.allocator.free(decl_source);
+            if (token.token_type == .eof) break;
 
-                        // Validate with zig_parse
-                        const sentinel_source = try self.allocator.dupeZ(u8, decl_source);
-                        defer self.allocator.free(sentinel_source);
+            // Try to parse as Zig top-level item first
+            const source_slice: [:0]const u8 = self.lexer.source[start_pos.. :0];
 
-                        if (try zig_parse.parseTopLevelItem(self.allocator, sentinel_source)) |result| {
-                            // Note: result.source_text is allocated by zig_parse and ownership is transferred to items
-                            try items.append(self.allocator, .{ .declaration = result.source_text });
-                        } else {
-                            return error.InvalidDeclaration;
-                        }
-                    } else {
-                        return error.UnexpectedToken;
-                    }
-                },
-                .zempl_keyword => {
-                    // Parse zempl component
+            if (try zig_parse.parseTopLevelItem(self.allocator, source_slice)) |result| {
+                // Found a valid Zig declaration
+                try items.append(self.allocator, .{ .declaration = result.source_text });
+
+                // Advance lexer by consumed bytes
+                self.lexer.advanceBy(result.consumed);
+            } else {
+                // Not a Zig declaration, try parsing as zempl component
+                if (token.token_type == .zempl_keyword) {
+                    // Consume the zempl keyword
+                    _ = self.lexer.next();
                     const component = try self.parseZemplComponent();
                     try items.append(self.allocator, .{ .component = component });
-                },
-                else => {
+                } else {
                     return error.UnexpectedToken;
-                },
+                }
             }
         }
 
@@ -354,4 +340,43 @@ test "parser handles simple zempl component" {
     try std.testing.expectEqual(@as(usize, 1), file.items.len);
     try std.testing.expect(file.items[0] == .component);
     try std.testing.expectEqualStrings("Hello", file.items[0].component.name);
+}
+
+test "parser handles multiple declarations" {
+    const source = "const x = 1;\nconst y = 2;";
+    var lexer = Lexer.init(source, "test.zempl");
+
+    const parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
+    var mutable_parser = parser;
+    const file = try mutable_parser.parseFile();
+    defer {
+        for (file.items) |*item| {
+            mutable_parser.deinitZemplItem(item);
+        }
+        std.testing.allocator.free(file.items);
+    }
+
+    try std.testing.expectEqual(@as(usize, 2), file.items.len);
+    try std.testing.expect(file.items[0] == .declaration);
+    try std.testing.expect(file.items[1] == .declaration);
+}
+
+test "parser handles declaration and component" {
+    const source = "const x = 1;\nzempl Hello() { <div>Hello</div> }";
+    var lexer = Lexer.init(source, "test.zempl");
+
+    const parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
+    var mutable_parser = parser;
+    const file = try mutable_parser.parseFile();
+    defer {
+        for (file.items) |*item| {
+            mutable_parser.deinitZemplItem(item);
+        }
+        std.testing.allocator.free(file.items);
+    }
+
+    try std.testing.expectEqual(@as(usize, 2), file.items.len);
+    try std.testing.expect(file.items[0] == .declaration);
+    try std.testing.expect(file.items[1] == .component);
+    try std.testing.expectEqualStrings("Hello", file.items[1].component.name);
 }
