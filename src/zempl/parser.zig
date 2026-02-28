@@ -50,7 +50,7 @@ pub const Parser = struct {
             switch (token.token_type) {
                 .eof => break,
                 .identifier => {
-                    // Check if it's a top-level declaration or zempl component
+                    // Check if it's a top-level declaration
                     if (std.mem.eql(u8, token.text, "const") or
                         std.mem.eql(u8, token.text, "var") or
                         std.mem.eql(u8, token.text, "fn") or
@@ -70,13 +70,14 @@ pub const Parser = struct {
                         } else {
                             return error.InvalidDeclaration;
                         }
-                    } else if (std.mem.eql(u8, token.text, "zempl")) {
-                        // Parse zempl component
-                        const component = try self.parseZemplComponent();
-                        try items.append(self.allocator, .{ .component = component });
                     } else {
                         return error.UnexpectedToken;
                     }
+                },
+                .zempl_keyword => {
+                    // Parse zempl component
+                    const component = try self.parseZemplComponent();
+                    try items.append(self.allocator, .{ .component = component });
                 },
                 else => {
                     return error.UnexpectedToken;
@@ -155,23 +156,25 @@ pub const Parser = struct {
         // Expect parameter list (parentheses with content)
         // For now, just skip to the opening brace
         var paren_depth: i32 = 0;
-        var found_paren = false;
 
         while (true) {
             const token = self.lexer.next();
             switch (token.token_type) {
+                .eof => return error.UnexpectedEof,
+                .text => {
+                    // Check for parens in the text
+                    for (token.text) |c| {
+                        if (c == '(') paren_depth += 1;
+                        if (c == ')') paren_depth -= 1;
+                    }
+                },
                 .lbrace => {
-                    if (paren_depth == 0 and found_paren) {
+                    if (paren_depth == 0) {
                         // We've reached the body opening brace
                         break;
                     }
                 },
-                else => {
-                    if (!found_paren and token.token_type == .text and token.text[0] == '(') {
-                        found_paren = true;
-                        paren_depth = 1;
-                    }
-                },
+                else => {},
             }
         }
 
@@ -332,4 +335,23 @@ test "parser handles simple const declaration" {
 
     try std.testing.expectEqual(@as(usize, 1), file.items.len);
     try std.testing.expect(file.items[0] == .declaration);
+}
+
+test "parser handles simple zempl component" {
+    const source = "zempl Hello() { <div>Hello</div> }";
+    var lexer = Lexer.init(source, "test.zempl");
+
+    const parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
+    var mutable_parser = parser;
+    const file = try mutable_parser.parseFile();
+    defer {
+        for (file.items) |*item| {
+            mutable_parser.deinitZemplItem(item);
+        }
+        std.testing.allocator.free(file.items);
+    }
+
+    try std.testing.expectEqual(@as(usize, 1), file.items.len);
+    try std.testing.expect(file.items[0] == .component);
+    try std.testing.expectEqualStrings("Hello", file.items[0].component.name);
 }
