@@ -165,12 +165,14 @@ Zempl transforms `.zempl` files into `.zig` files. The implementation is divided
 
 ### Task 4.4: Tests ✓
 - ✓ Tests for parseExpression, parseTypeExpr, parseTopLevelItem
-- ⚠️ Memory leaks present (tokens not freed - known issue)
+- ✓ All 13 zig_parse tests passing
+- ✓ Memory leaks fixed (use tokens.slice() instead of toOwnedSlice())
 
 **Deliverables**:
 - ✓ Forked Parse.zig (3811 lines) with exposed functions
 - ✓ zig_parse.zig with function-based API
-- ⏳ Tests for expression parsing functions
+- ✓ ParseResult struct with {source_text, consumed} fields
+- ✓ Tests for expression parsing functions
 
 **Status**: Complete - expression parsing infrastructure ready
 
