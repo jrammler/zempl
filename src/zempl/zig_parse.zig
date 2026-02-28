@@ -150,71 +150,52 @@ pub fn parseTopLevelItem(allocator: std.mem.Allocator, source: [:0]const u8) Par
 // ============================================================================
 
 test "parseExpression parses simple integer literal" {
-    // NOTE: These tests currently have memory leaks from token allocation
-    // The tokens MultiArrayList allocates memory that isn't properly freed
-    // This is a known issue that needs fixing
     const source = "42";
-    const node = parseExpression(std.testing.allocator, source) catch {
-        // For now, just verify it doesn't crash
-        return;
-    };
-    _ = node;
+    const node = try parseExpression(std.testing.allocator, source);
+    // Verify we got a valid node index
+    try std.testing.expect(@intFromEnum(node) >= 0);
 }
 
 test "parseExpression parses string literal" {
     const source = "\"hello world\"";
-    const node = parseExpression(std.testing.allocator, source) catch {
-        return;
-    };
-    _ = node;
+    const node = try parseExpression(std.testing.allocator, source);
+    try std.testing.expect(@intFromEnum(node) >= 0);
 }
 
 test "parseExpression parses variable access" {
     const source = "my_var";
-    const node = parseExpression(std.testing.allocator, source) catch {
-        return;
-    };
-    _ = node;
+    const node = try parseExpression(std.testing.allocator, source);
+    try std.testing.expect(@intFromEnum(node) >= 0);
 }
 
 test "parseExpression parses binary expression" {
     const source = "a + b";
-    const node = parseExpression(std.testing.allocator, source) catch {
-        return;
-    };
-    _ = node;
+    const node = try parseExpression(std.testing.allocator, source);
+    try std.testing.expect(@intFromEnum(node) >= 0);
 }
 
 test "parseExpression parses function call" {
     const source = "foo(a, b)";
-    const node = parseExpression(std.testing.allocator, source) catch {
-        return;
-    };
-    _ = node;
+    const node = try parseExpression(std.testing.allocator, source);
+    try std.testing.expect(@intFromEnum(node) >= 0);
 }
 
 test "parseTypeExpr parses primitive type" {
     const source = "i32";
-    const node = parseTypeExpr(std.testing.allocator, source) catch {
-        return;
-    };
-    _ = node;
+    const node = try parseTypeExpr(std.testing.allocator, source);
+    try std.testing.expect(@intFromEnum(node) >= 0);
 }
 
 test "parseTypeExpr parses slice type" {
     const source = "[]const u8";
-    const node = parseTypeExpr(std.testing.allocator, source) catch {
-        return;
-    };
-    _ = node;
+    const node = try parseTypeExpr(std.testing.allocator, source);
+    try std.testing.expect(@intFromEnum(node) >= 0);
 }
 
 test "parseTypeExpr parses pointer type" {
     const source = "*u32";
-    const node = parseTypeExpr(std.testing.allocator, source) catch {
-        return;
-    };
-    _ = node;
+    const node = try parseTypeExpr(std.testing.allocator, source);
+    try std.testing.expect(@intFromEnum(node) >= 0);
 }
 
 test "parseTopLevelItem parses const declaration" {
