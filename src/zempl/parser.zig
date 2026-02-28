@@ -44,6 +44,7 @@ pub const Parser = struct {
 
         // Parse top-level items until EOF
         while (true) {
+            const start_pos = self.lexer.getPosition();
             const token = self.lexer.next();
 
             switch (token.token_type) {
@@ -56,7 +57,7 @@ pub const Parser = struct {
                         std.mem.eql(u8, token.text, "pub"))
                     {
                         // Parse Zig declaration
-                        const decl_source = try self.parseDeclaration();
+                        const decl_source = try self.parseDeclaration(start_pos);
                         defer self.allocator.free(decl_source);
 
                         // Validate with zig_parse
@@ -64,7 +65,7 @@ pub const Parser = struct {
                         defer self.allocator.free(sentinel_source);
 
                         if (try zig_parse.parseTopLevelItem(self.allocator, sentinel_source)) |result| {
-                            defer self.allocator.free(result.source_text);
+                            // Note: result.source_text is allocated by zig_parse and ownership is transferred to items
                             try items.append(self.allocator, .{ .declaration = result.source_text });
                         } else {
                             return error.InvalidDeclaration;
@@ -94,18 +95,51 @@ pub const Parser = struct {
     }
 
     /// Parse a Zig declaration from current position
-    fn parseDeclaration(self: *Parser) ![]const u8 {
-        // Collect tokens until we reach a reasonable stopping point
-        // For now, we'll collect until we hit a semicolon or opening brace
-        var buffer = std.ArrayList(u8).empty;
-        defer buffer.deinit(self.allocator);
+    /// start_pos is the position in the source where the declaration begins
+    fn parseDeclaration(self: *Parser, start_pos: usize) ![]const u8 {
+        // We need to find the end of the declaration
+        // A declaration ends with ';' or with a block '{ ... }'
 
-        // Go back and re-parse from the start of the declaration
-        // This is a simplified approach - in reality we'd need proper position tracking
-        // For now, just return the token text as a placeholder
-        try buffer.appendSlice(self.allocator, self.lexer.source);
+        var paren_depth: i32 = 0;
+        var brace_depth: i32 = 0;
+        var found_semicolon = false;
 
-        return buffer.toOwnedSlice(self.allocator);
+        // Continue parsing tokens until we reach the end of the declaration
+        while (true) {
+            const token = self.lexer.next();
+
+            switch (token.token_type) {
+                .eof => break,
+                .text => {
+                    // Check for semicolon, braces, parens
+                    for (token.text) |c| {
+                        switch (c) {
+                            '(' => paren_depth += 1,
+                            ')' => paren_depth -= 1,
+                            '{' => brace_depth += 1,
+                            '}' => brace_depth -= 1,
+                            ';' => if (paren_depth == 0 and brace_depth == 0) {
+                                found_semicolon = true;
+                            },
+                            else => {},
+                        }
+                    }
+                },
+                else => {},
+            }
+
+            // End conditions:
+            // 1. Found semicolon at top level (paren_depth == 0, brace_depth == 0)
+            // 2. Found closing brace at brace_depth == -1 (end of function body)
+            if (found_semicolon) break;
+            if (brace_depth < 0) break; // End of function with body
+        }
+
+        // Extract the declaration text from source
+        const end_pos = self.lexer.getPosition();
+        const decl_text = self.lexer.source[start_pos..end_pos];
+
+        return try self.allocator.dupe(u8, decl_text);
     }
 
     /// Parse a zempl component definition
@@ -280,4 +314,22 @@ test "parser returns empty file for empty input" {
     }
 
     try std.testing.expectEqual(@as(usize, 0), file.items.len);
+}
+
+test "parser handles simple const declaration" {
+    const source = "const x = 42;";
+    var lexer = Lexer.init(source, "test.zempl");
+
+    const parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
+    var mutable_parser = parser;
+    const file = try mutable_parser.parseFile();
+    defer {
+        for (file.items) |*item| {
+            mutable_parser.deinitZemplItem(item);
+        }
+        std.testing.allocator.free(file.items);
+    }
+
+    try std.testing.expectEqual(@as(usize, 1), file.items.len);
+    try std.testing.expect(file.items[0] == .declaration);
 }
