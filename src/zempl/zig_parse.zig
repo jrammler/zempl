@@ -109,11 +109,6 @@ pub fn parseParamDeclList(allocator: std.mem.Allocator, source: [:0]const u8) !P
         parse.errors.deinit(allocator);
     }
 
-    // Check if it starts with l_paren
-    if (parse.tokenTag(parse.tok_i) != .l_paren) {
-        return error.ParseError;
-    }
-
     _ = try parse.parseParamDeclList();
 
     const final_tok_i = parse.tok_i;
