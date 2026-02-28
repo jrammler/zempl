@@ -36,8 +36,8 @@ pub const Parser = struct {
     pub fn parseFile(self: *Parser) !ZemplFile {
         var items = std.ArrayList(ZemplItem).empty;
         errdefer {
-            for (items.items) |*item| {
-                self.deinitZemplItem(item);
+            for (items.items) |item| {
+                item.deinit(self.allocator);
             }
             items.deinit(self.allocator);
         }
@@ -138,7 +138,7 @@ pub const Parser = struct {
         var nodes = std.ArrayList(HtmlNode).empty;
         errdefer {
             for (nodes.items) |*node| {
-                self.deinitHtmlNode(node);
+                node.deinit(self.allocator);
             }
             nodes.deinit(self.allocator);
         }
@@ -157,77 +157,6 @@ pub const Parser = struct {
         }
 
         return nodes.toOwnedSlice(self.allocator);
-    }
-
-    /// Helper to deinit a ZemplItem
-    fn deinitZemplItem(self: *Parser, item: *ZemplItem) void {
-        switch (item.*) {
-            .declaration => |decl| {
-                self.allocator.free(decl);
-            },
-            .component => |*comp| {
-                self.deinitComponent(comp);
-            },
-        }
-    }
-
-    /// Helper to deinit a component
-    fn deinitComponent(self: *Parser, comp: *ZemplComponent) void {
-        self.allocator.free(comp.name);
-        self.allocator.free(comp.params);
-        for (comp.body) |*node| {
-            self.deinitHtmlNode(node);
-        }
-        self.allocator.free(comp.body);
-    }
-
-    /// Helper to deinit an HTML node
-    fn deinitHtmlNode(self: *Parser, node: *HtmlNode) void {
-        switch (node.*) {
-            .element => |*elem| {
-                for (elem.attributes) |*attr| {
-                    self.allocator.free(attr.name);
-                    self.allocator.free(attr.value);
-                }
-                self.allocator.free(elem.attributes);
-                for (elem.children) |*child| {
-                    self.deinitHtmlNode(child);
-                }
-                self.allocator.free(elem.children);
-                self.allocator.free(elem.tag_name);
-            },
-            .text => |*text| {
-                self.allocator.free(text.content);
-            },
-            .comment => |*comment| {
-                self.allocator.free(comment.content);
-            },
-            .doctype => |*doctype| {
-                self.allocator.free(doctype.content);
-            },
-            .expression => |*expr| {
-                self.allocator.free(expr.expr);
-            },
-            .code_block => |*block| {
-                self.allocator.free(block.statements);
-            },
-            .control_flow => |*ctrl| {
-                self.deinitControlFlow(ctrl);
-            },
-            .component_call => |*call| {
-                self.allocator.free(call.component_name);
-                for (call.args) |*arg| {
-                    self.allocator.free(arg.expr);
-                }
-                self.allocator.free(call.args);
-            },
-        }
-    }
-
-    fn deinitControlFlow(self: *Parser, ctrl: anytype) void {
-        _ = self;
-        _ = ctrl;
-        // TODO: Implement control flow cleanup
     }
 };
 
@@ -249,15 +178,9 @@ test "parser returns empty file for empty input" {
     const source = "";
     var lexer = Lexer.init(source, "test.zempl");
 
-    const parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
-    var mutable_parser = parser;
-    const file = try mutable_parser.parseFile();
-    defer {
-        for (file.items) |*item| {
-            mutable_parser.deinitZemplItem(item);
-        }
-        std.testing.allocator.free(file.items);
-    }
+    var parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
+    const file = try parser.parseFile();
+    defer file.deinit(std.testing.allocator);
 
     try std.testing.expectEqual(@as(usize, 0), file.items.len);
 }
@@ -266,15 +189,9 @@ test "parser handles simple const declaration" {
     const source = "const x = 42;";
     var lexer = Lexer.init(source, "test.zempl");
 
-    const parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
-    var mutable_parser = parser;
-    const file = try mutable_parser.parseFile();
-    defer {
-        for (file.items) |*item| {
-            mutable_parser.deinitZemplItem(item);
-        }
-        std.testing.allocator.free(file.items);
-    }
+    var parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
+    const file = try parser.parseFile();
+    defer file.deinit(std.testing.allocator);
 
     try std.testing.expectEqual(@as(usize, 1), file.items.len);
     try std.testing.expect(file.items[0] == .declaration);
@@ -284,15 +201,9 @@ test "parser handles simple zempl component" {
     const source = "zempl Hello() { <div>Hello</div> }";
     var lexer = Lexer.init(source, "test.zempl");
 
-    const parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
-    var mutable_parser = parser;
-    const file = try mutable_parser.parseFile();
-    defer {
-        for (file.items) |*item| {
-            mutable_parser.deinitZemplItem(item);
-        }
-        std.testing.allocator.free(file.items);
-    }
+    var parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
+    const file = try parser.parseFile();
+    defer file.deinit(std.testing.allocator);
 
     try std.testing.expectEqual(@as(usize, 1), file.items.len);
     try std.testing.expect(file.items[0] == .component);
@@ -304,15 +215,9 @@ test "parser handles zempl component with params" {
     const source = "zempl Greeting(name: []const u8) { <div>Hello</div> }";
     var lexer = Lexer.init(source, "test.zempl");
 
-    const parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
-    var mutable_parser = parser;
-    const file = try mutable_parser.parseFile();
-    defer {
-        for (file.items) |*item| {
-            mutable_parser.deinitZemplItem(item);
-        }
-        std.testing.allocator.free(file.items);
-    }
+    var parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
+    const file = try parser.parseFile();
+    defer file.deinit(std.testing.allocator);
 
     try std.testing.expectEqual(@as(usize, 1), file.items.len);
     try std.testing.expect(file.items[0] == .component);
@@ -324,15 +229,9 @@ test "parser handles pub zempl component" {
     const source = "pub zempl PublicComponent() { <div>Public</div> }";
     var lexer = Lexer.init(source, "test.zempl");
 
-    const parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
-    var mutable_parser = parser;
-    const file = try mutable_parser.parseFile();
-    defer {
-        for (file.items) |*item| {
-            mutable_parser.deinitZemplItem(item);
-        }
-        std.testing.allocator.free(file.items);
-    }
+    var parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
+    const file = try parser.parseFile();
+    defer file.deinit(std.testing.allocator);
 
     try std.testing.expectEqual(@as(usize, 1), file.items.len);
     try std.testing.expect(file.items[0] == .component);
@@ -345,15 +244,9 @@ test "parser handles multiple declarations" {
     const source = "const x = 1;\nconst y = 2;";
     var lexer = Lexer.init(source, "test.zempl");
 
-    const parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
-    var mutable_parser = parser;
-    const file = try mutable_parser.parseFile();
-    defer {
-        for (file.items) |*item| {
-            mutable_parser.deinitZemplItem(item);
-        }
-        std.testing.allocator.free(file.items);
-    }
+    var parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
+    const file = try parser.parseFile();
+    defer file.deinit(std.testing.allocator);
 
     try std.testing.expectEqual(@as(usize, 2), file.items.len);
     try std.testing.expect(file.items[0] == .declaration);
@@ -364,15 +257,9 @@ test "parser handles declaration and component" {
     const source = "const x = 1;\nzempl Hello() { <div>Hello</div> }";
     var lexer = Lexer.init(source, "test.zempl");
 
-    const parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
-    var mutable_parser = parser;
-    const file = try mutable_parser.parseFile();
-    defer {
-        for (file.items) |*item| {
-            mutable_parser.deinitZemplItem(item);
-        }
-        std.testing.allocator.free(file.items);
-    }
+    var parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
+    const file = try parser.parseFile();
+    defer file.deinit(std.testing.allocator);
 
     try std.testing.expectEqual(@as(usize, 2), file.items.len);
     try std.testing.expect(file.items[0] == .declaration);
