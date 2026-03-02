@@ -1236,6 +1236,9 @@ test "parseElementStart handles element with boolean attribute" {
 
     try std.testing.expect(file.items[0].component.body[0] == .element);
     try std.testing.expectEqualStrings("input", file.items[0].component.body[0].element.tag_name);
+    try std.testing.expect(file.items[0].component.body[0].element.attributes.len == 1);
+    try std.testing.expectEqualStrings("disabled", file.items[0].component.body[0].element.attributes[0].name);
+    try std.testing.expectEqualStrings("", file.items[0].component.body[0].element.attributes[0].value);
 }
 
 test "parseAttribute handles attribute with expression value" {

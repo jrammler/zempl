@@ -12,4 +12,5 @@ test {
     std.testing.refAllDecls(@import("zempl/ast.zig"));
     std.testing.refAllDecls(@import("zempl/zig_parse.zig"));
     std.testing.refAllDecls(@import("zempl/error.zig"));
+    std.testing.refAllDecls(@import("zempl/codegen.zig"));
 }
