@@ -98,7 +98,7 @@ pub fn main() !void {
         std.debug.print("  ✓ Generated\n", .{});
     }
 
-    std.debug.print("\n");
+    std.debug.print("\n", .{});
 
     // Generate templates.zig index file
     if (success_count > 0) {

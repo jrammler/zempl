@@ -212,14 +212,12 @@ pub const CodeGenerator = struct {
         try self.writer.writeAll(")");
 
         // Write captures
-        if (for_loop.captures.len > 0) {
-            try self.writer.writeAll(" |");
-            for (for_loop.captures, 0..) |capture, i| {
-                if (i > 0) try self.writer.writeAll(", ");
-                try self.writer.writeAll(capture);
-            }
-            try self.writer.writeAll("|");
+        try self.writer.writeAll(" |");
+        for (for_loop.captures, 0..) |capture, i| {
+            if (i > 0) try self.writer.writeAll(", ");
+            try self.writer.writeAll(capture);
         }
+        try self.writer.writeAll("|");
 
         try self.writer.writeAll(" {\n");
 

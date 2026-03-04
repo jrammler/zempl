@@ -32,6 +32,7 @@ pub const ParserError = error{
     ExpectedRParen,
     ExpectedPipe,
     ExpectedIdentifier,
+    ExpectedComma,
     UnknownZemplConstruct,
     OutOfMemory,
 };
@@ -612,7 +613,7 @@ pub const Parser = struct {
             if (capture.token_type != .identifier) {
                 return error.ExpectedIdentifier;
             }
-            try iterables.append(self.allocator, try self.allocator.dupe(u8, capture.text));
+            try captures.append(self.allocator, try self.allocator.dupe(u8, capture.text));
             if (self.lexer.peek().token_type != .comma) break;
         }
 
@@ -704,64 +705,37 @@ pub const Parser = struct {
             args.deinit(self.allocator);
         }
 
-        // Check for arguments
-        const next_token = self.lexer.peek();
-        if (next_token.token_type == .text and std.mem.eql(u8, next_token.text, "(")) {
-            _ = self.lexer.next(); // consume '('
+        const lparen_token = self.lexer.next();
+        if (lparen_token.token_type != .lparen) {
+            return error.ExpectedLParen;
+        }
 
-            // Parse argument expressions separated by commas
-            while (true) {
-                const token = self.lexer.peek();
-                if (token.token_type == .text and std.mem.eql(u8, token.text, ")")) {
-                    _ = self.lexer.next(); // consume ')'
-                    break;
-                }
+        // Parse argument expressions separated by commas
+        while (true) {
+            const token = self.lexer.peek();
 
-                if (token.token_type == .eof) {
-                    return error.UnexpectedEof;
-                }
+            if (token.token_type == .eof) {
+                return error.UnexpectedEof;
+            }
 
-                // Parse argument expression
-                const arg_start = self.lexer.getPosition();
+            if (token.token_type == .rparen) {
+                _ = self.lexer.next();
+                break;
+            }
 
-                var paren_depth: i32 = 1;
-                while (paren_depth > 0) {
-                    const arg_token = self.lexer.next();
-                    if (arg_token.token_type == .text) {
-                        for (arg_token.text) |c| {
-                            if (c == '(') paren_depth += 1;
-                            if (c == ')') paren_depth -= 1;
-                        }
-                    }
-                    if (paren_depth == 1 and arg_token.token_type == .text and std.mem.eql(u8, arg_token.text, ",")) {
-                        break;
-                    }
-                    if (arg_token.token_type == .eof) {
-                        return error.UnexpectedEof;
-                    }
-                }
+            const arg = try self.parseExpression();
 
-                const arg_end = self.lexer.getPosition();
-                var arg_text = self.lexer.source[arg_start..arg_end];
+            try args.append(self.allocator, .{
+                .expr = arg,
+                .location = token.location,
+            });
 
-                // Remove trailing comma if present
-                if (std.mem.endsWith(u8, arg_text, ",")) {
-                    arg_text = arg_text[0 .. arg_text.len - 1];
-                }
-
-                const arg_expr = try self.allocator.dupe(u8, arg_text);
-                try args.append(self.allocator, .{
-                    .expr = arg_expr,
-                    .location = .{
-                        .file_path = self.file_path,
-                        .line = 1,
-                        .column = 1,
-                    },
-                });
-
-                if (paren_depth == 0) {
-                    break;
-                }
+            const end_token = self.lexer.next();
+            if (end_token.token_type == .rparen) {
+                break;
+            }
+            if (end_token.token_type != .comma) {
+                return error.ExpectedComma;
             }
         }
 
