@@ -14,31 +14,31 @@ const ZemplCodeBlock = @import("ast.zig").ZemplCodeBlock;
 const ZemplArg = @import("ast.zig").ZemplArg;
 const HtmlAttribute = @import("ast.zig").HtmlAttribute;
 
-pub const CodegenError = anyerror;
+const Error = error{
+    WriteFailed,
+};
 
 /// Code generator that transforms zempl AST into Zig code
 pub const CodeGenerator = struct {
-    allocator: std.mem.Allocator,
     writer: *std.Io.Writer,
 
     const INDENT = "    ";
 
-    pub fn init(allocator: std.mem.Allocator, writer: *std.Io.Writer) CodeGenerator {
+    pub fn init(writer: *std.Io.Writer) CodeGenerator {
         return .{
-            .allocator = allocator,
             .writer = writer,
         };
     }
 
     /// Generate Zig code from a zempl file
-    pub fn generateFile(self: *CodeGenerator, file: ZemplFile) CodegenError!void {
+    pub fn generateFile(self: *CodeGenerator, file: ZemplFile) Error!void {
         for (file.items) |item| {
             try self.generateItem(item);
             try self.writer.writeAll("\n");
         }
     }
 
-    fn generateItem(self: *CodeGenerator, item: ZemplItem) CodegenError!void {
+    fn generateItem(self: *CodeGenerator, item: ZemplItem) Error!void {
         switch (item) {
             .declaration => |decl| {
                 // Preserve declarations as-is
@@ -51,7 +51,7 @@ pub const CodeGenerator = struct {
         }
     }
 
-    fn generateComponent(self: *CodeGenerator, component: ZemplComponent, indent_level: usize) CodegenError!void {
+    fn generateComponent(self: *CodeGenerator, component: ZemplComponent, indent_level: usize) Error!void {
         // Public modifier if needed
         if (component.is_public) {
             try self.writer.writeAll("pub ");
@@ -80,7 +80,7 @@ pub const CodeGenerator = struct {
         try self.writer.writeAll("}\n");
     }
 
-    fn generateHtmlNode(self: *CodeGenerator, node: HtmlNode, indent_level: usize) CodegenError!void {
+    fn generateHtmlNode(self: *CodeGenerator, node: HtmlNode, indent_level: usize) Error!void {
         switch (node) {
             .element => |elem| try self.generateElement(elem, indent_level),
             .text => |text| try self.generateText(text.content, indent_level),
@@ -92,7 +92,7 @@ pub const CodeGenerator = struct {
         }
     }
 
-    fn generateElement(self: *CodeGenerator, element: HtmlElement, indent_level: usize) CodegenError!void {
+    fn generateElement(self: *CodeGenerator, element: HtmlElement, indent_level: usize) Error!void {
         try self.writeIndent(indent_level);
 
         // Opening tag start
@@ -125,7 +125,7 @@ pub const CodeGenerator = struct {
 
         // Children
         for (element.children) |child| {
-            try self.generateHtmlNode(child, indent_level + 1);
+            try self.generateHtmlNode(child, indent_level);
         }
 
         // Closing tag
@@ -135,7 +135,7 @@ pub const CodeGenerator = struct {
         try self.writer.writeAll(">\");\n");
     }
 
-    fn generateText(self: *CodeGenerator, content: []const u8, indent_level: usize) CodegenError!void {
+    fn generateText(self: *CodeGenerator, content: []const u8, indent_level: usize) Error!void {
         if (content.len == 0) return;
 
         try self.writeIndent(indent_level);
@@ -144,27 +144,28 @@ pub const CodeGenerator = struct {
         try self.writer.writeAll("\");\n");
     }
 
-    fn generateDeclaration(self: *CodeGenerator, content: []const u8, indent_level: usize) CodegenError!void {
+    fn generateDeclaration(self: *CodeGenerator, content: []const u8, indent_level: usize) Error!void {
         try self.writeIndent(indent_level);
         try self.writer.writeAll("try writer.writeAll(\"<!");
         try self.writer.writeAll(content);
         try self.writer.writeAll(">\");\n");
     }
 
-    fn generateExpression(self: *CodeGenerator, expr: ZemplExpression, indent_level: usize) CodegenError!void {
+    fn generateExpression(self: *CodeGenerator, expr: ZemplExpression, indent_level: usize) Error!void {
         try self.writeIndent(indent_level);
         try self.writer.writeAll("try @import(\"zempl_runtime\").escapeHtml(writer, ");
         try self.writer.writeAll(expr.expr);
         try self.writer.writeAll(");\n");
     }
 
-    fn generateCodeBlock(self: *CodeGenerator, block: ZemplCodeBlock, _: usize) CodegenError!void {
+    fn generateCodeBlock(self: *CodeGenerator, block: ZemplCodeBlock, indent_level: usize) Error!void {
         // Code blocks are inlined directly
+        try self.writeIndent(indent_level);
         try self.writer.writeAll(block.statements);
         try self.writer.writeAll("\n");
     }
 
-    fn generateControlFlow(self: *CodeGenerator, control: ZemplControlFlow, indent_level: usize) CodegenError!void {
+    fn generateControlFlow(self: *CodeGenerator, control: ZemplControlFlow, indent_level: usize) Error!void {
         switch (control) {
             .if_stmt => |*if_stmt| try self.generateIf(if_stmt.*, indent_level),
             .for_loop => |*for_loop| try self.generateFor(for_loop.*, indent_level),
@@ -172,7 +173,7 @@ pub const CodeGenerator = struct {
         }
     }
 
-    fn generateIf(self: *CodeGenerator, if_stmt: ZemplIf, indent_level: usize) CodegenError!void {
+    fn generateIf(self: *CodeGenerator, if_stmt: ZemplIf, indent_level: usize) Error!void {
         try self.writeIndent(indent_level);
         try self.writer.writeAll("if (");
         try self.writer.writeAll(if_stmt.condition);
@@ -199,7 +200,7 @@ pub const CodeGenerator = struct {
         try self.writer.writeAll("\n");
     }
 
-    fn generateFor(self: *CodeGenerator, for_loop: ZemplFor, indent_level: usize) CodegenError!void {
+    fn generateFor(self: *CodeGenerator, for_loop: ZemplFor, indent_level: usize) Error!void {
         try self.writeIndent(indent_level);
         try self.writer.writeAll("for (");
 
@@ -229,7 +230,7 @@ pub const CodeGenerator = struct {
         try self.writer.writeAll("}\n");
     }
 
-    fn generateWhile(self: *CodeGenerator, while_loop: ZemplWhile, indent_level: usize) CodegenError!void {
+    fn generateWhile(self: *CodeGenerator, while_loop: ZemplWhile, indent_level: usize) Error!void {
         try self.writeIndent(indent_level);
         try self.writer.writeAll("while (");
         try self.writer.writeAll(while_loop.condition);
@@ -243,7 +244,7 @@ pub const CodeGenerator = struct {
         try self.writer.writeAll("}\n");
     }
 
-    fn generateComponentCall(self: *CodeGenerator, call: ZemplComponentCall, indent_level: usize) CodegenError!void {
+    fn generateComponentCall(self: *CodeGenerator, call: ZemplComponentCall, indent_level: usize) Error!void {
         try self.writeIndent(indent_level);
         try self.writer.writeAll("try ");
         try self.writer.writeAll(call.component_name);
@@ -258,14 +259,14 @@ pub const CodeGenerator = struct {
         try self.writer.writeAll(");\n");
     }
 
-    fn writeIndent(self: *CodeGenerator, indent_level: usize) CodegenError!void {
+    fn writeIndent(self: *CodeGenerator, indent_level: usize) Error!void {
         var i: usize = 0;
         while (i < indent_level) : (i += 1) {
             try self.writer.writeAll(INDENT);
         }
     }
 
-    fn escapeAndWriteString(self: *CodeGenerator, str: []const u8) CodegenError!void {
+    fn escapeAndWriteString(self: *CodeGenerator, str: []const u8) Error!void {
         for (str) |c| {
             switch (c) {
                 '\\' => try self.writer.writeAll("\\\\"),
@@ -289,7 +290,7 @@ test "codegen generates simple component" {
     var allocating = std.Io.Writer.Allocating.init(allocator);
     defer allocating.deinit();
 
-    var codegen = CodeGenerator.init(allocator, &allocating.writer);
+    var codegen = CodeGenerator.init(&allocating.writer);
 
     const component = ZemplComponent{
         .name = try allocator.dupe(u8, "Hello"),
@@ -324,7 +325,7 @@ test "codegen generates public component" {
     var allocating = std.Io.Writer.Allocating.init(allocator);
     defer allocating.deinit();
 
-    var codegen = CodeGenerator.init(allocator, &allocating.writer);
+    var codegen = CodeGenerator.init(&allocating.writer);
 
     const component = ZemplComponent{
         .name = try allocator.dupe(u8, "Public"),
@@ -355,7 +356,7 @@ test "codegen generates component with params" {
     var allocating = std.Io.Writer.Allocating.init(allocator);
     defer allocating.deinit();
 
-    var codegen = CodeGenerator.init(allocator, &allocating.writer);
+    var codegen = CodeGenerator.init(&allocating.writer);
 
     const component = ZemplComponent{
         .name = try allocator.dupe(u8, "Greeting"),
@@ -386,7 +387,7 @@ test "codegen generates expression interpolation" {
     var allocating = std.Io.Writer.Allocating.init(allocator);
     defer allocating.deinit();
 
-    var codegen = CodeGenerator.init(allocator, &allocating.writer);
+    var codegen = CodeGenerator.init(&allocating.writer);
 
     const expr = ZemplExpression{
         .expr = try allocator.dupe(u8, "title"),
@@ -409,7 +410,7 @@ test "codegen generates HTML element" {
     var allocating = std.Io.Writer.Allocating.init(allocator);
     defer allocating.deinit();
 
-    var codegen = CodeGenerator.init(allocator, &allocating.writer);
+    var codegen = CodeGenerator.init(&allocating.writer);
 
     const element = HtmlElement{
         .tag_name = try allocator.dupe(u8, "div"),
@@ -437,7 +438,7 @@ test "codegen generates void element" {
     var allocating = std.Io.Writer.Allocating.init(allocator);
     defer allocating.deinit();
 
-    var codegen = CodeGenerator.init(allocator, &allocating.writer);
+    var codegen = CodeGenerator.init(&allocating.writer);
 
     const element = HtmlElement{
         .tag_name = try allocator.dupe(u8, "br"),
@@ -464,7 +465,7 @@ test "codegen generates element with attributes" {
     var allocating = std.Io.Writer.Allocating.init(allocator);
     defer allocating.deinit();
 
-    var codegen = CodeGenerator.init(allocator, &allocating.writer);
+    var codegen = CodeGenerator.init(&allocating.writer);
 
     const attributes = try allocator.alloc(HtmlAttribute, 2);
     attributes[0] = .{
@@ -514,7 +515,7 @@ test "codegen generates element with dynamic attribute values" {
     var allocating = std.Io.Writer.Allocating.init(allocator);
     defer allocating.deinit();
 
-    var codegen = CodeGenerator.init(allocator, &allocating.writer);
+    var codegen = CodeGenerator.init(&allocating.writer);
 
     const attributes = try allocator.alloc(HtmlAttribute, 1);
     attributes[0] = .{
@@ -558,7 +559,7 @@ test "codegen generates HTML declaration" {
     var allocating = std.Io.Writer.Allocating.init(allocator);
     defer allocating.deinit();
 
-    var codegen = CodeGenerator.init(allocator, &allocating.writer);
+    var codegen = CodeGenerator.init(&allocating.writer);
 
     const decl = @import("ast.zig").HtmlDeclaration{
         .content = try allocator.dupe(u8, "DOCTYPE html"),
@@ -581,7 +582,7 @@ test "codegen generates component call" {
     var allocating = std.Io.Writer.Allocating.init(allocator);
     defer allocating.deinit();
 
-    var codegen = CodeGenerator.init(allocator, &allocating.writer);
+    var codegen = CodeGenerator.init(&allocating.writer);
 
     const call = ZemplComponentCall{
         .component_name = try allocator.dupe(u8, "Header"),
@@ -605,7 +606,7 @@ test "codegen generates if statement" {
     var allocating = std.Io.Writer.Allocating.init(allocator);
     defer allocating.deinit();
 
-    var codegen = CodeGenerator.init(allocator, &allocating.writer);
+    var codegen = CodeGenerator.init(&allocating.writer);
 
     var if_stmt = ZemplIf{
         .condition = try allocator.dupe(u8, "show"),
@@ -638,7 +639,7 @@ test "codegen generates for loop" {
     var allocating = std.Io.Writer.Allocating.init(allocator);
     defer allocating.deinit();
 
-    var codegen = CodeGenerator.init(allocator, &allocating.writer);
+    var codegen = CodeGenerator.init(&allocating.writer);
 
     var for_loop = ZemplFor{
         .iterables = try allocator.dupe([]const u8, &.{try allocator.dupe(u8, "items")}),
@@ -674,7 +675,7 @@ test "codegen generates while loop" {
     var allocating = std.Io.Writer.Allocating.init(allocator);
     defer allocating.deinit();
 
-    var codegen = CodeGenerator.init(allocator, &allocating.writer);
+    var codegen = CodeGenerator.init(&allocating.writer);
 
     var while_loop = ZemplWhile{
         .condition = try allocator.dupe(u8, "running"),

@@ -1147,7 +1147,7 @@ test "parseTextContent handles text with special chars" {
 }
 
 test "parseComponentCall handles component without args" {
-    const source = "zempl Test() { @Header }";
+    const source = "zempl Test() { @Header() }";
     var lexer = Lexer.init(source, "test.zempl");
     var parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
     const file = try parser.parseFile();
@@ -1159,7 +1159,7 @@ test "parseComponentCall handles component without args" {
 }
 
 test "parseComponentCall handles component with args" {
-    const source = "zempl Test() { @Button(text: \"Click\") }";
+    const source = "zempl Test() { @Button(\"Click\") }";
     var lexer = Lexer.init(source, "test.zempl");
     var parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
     const file = try parser.parseFile();
@@ -1170,7 +1170,7 @@ test "parseComponentCall handles component with args" {
 }
 
 test "parseComponentCall handles component with multiple args" {
-    const source = "zempl Test() { @Card(title: \"Hello\", body: content) }";
+    const source = "zempl Test() { @Card(\"Hello\", content) }";
     var lexer = Lexer.init(source, "test.zempl");
     var parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
     const file = try parser.parseFile();

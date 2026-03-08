@@ -1,138 +1,200 @@
 const std = @import("std");
-const files = @import("zempl/files.zig");
+
+const Lexer = @import("zempl/lexer.zig").Lexer;
+const Parser = @import("zempl/parser.zig").Parser;
+const CodeGenerator = @import("zempl/codegen.zig").CodeGenerator;
+
+const Error = error{
+    OutOfMemory,
+    IoError,
+};
 
 const USAGE =
-    \\Usage: zempl <input-dir> <output-dir>
+    \\Usage: zempl <input-dir> <output-dri>
     \\
     \\  Transforms .zempl template files into .zig source files.
     \\
     \\Arguments:
     \\  <input-dir>   Directory containing .zempl files
-    \\  <output-dir>  Directory where .zig files will be generated
+    \\  <output-dir>  Path to directory where .zig files will be generated
     \\
     \\Options:
     \\  -h, --help    Show this help message
     \\
 ;
 
+fn handleArg(arg: ?[]const u8) ?[]const u8 {
+    if (arg) |a| {
+        if (std.mem.eql(u8, a, "-h") or std.mem.eql(u8, a, "--help")) {
+            std.debug.print("{s}", .{USAGE});
+            std.process.exit(0);
+        }
+        return a;
+    }
+    return null;
+}
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const args = try std.process.argsAlloc(allocator);
-    defer std.process.argsFree(allocator, args);
+    var args = std.process.args();
+    defer args.deinit();
 
-    if (args.len < 2) {
-        std.debug.print("{s}", .{USAGE});
-        std.process.exit(1);
-    }
+    // skip program name
+    _ = args.skip();
 
-    // Check for help flag
-    if (std.mem.eql(u8, args[1], "-h") or std.mem.eql(u8, args[1], "--help")) {
-        std.debug.print("{s}", .{USAGE});
-        std.process.exit(0);
-    }
-
-    if (args.len < 3) {
-        std.debug.print("Error: Missing required arguments\n\n{s}", .{USAGE});
-        std.process.exit(1);
-    }
-
-    const input_dir = args[1];
-    const output_dir = args[2];
-
-    // Validate input directory exists
-    std.fs.cwd().access(input_dir, .{}) catch |err| {
-        std.debug.print("Error: Cannot access input directory '{s}': {s}\n", .{
-            input_dir,
-            @errorName(err),
-        });
+    const input_path = handleArg(args.next()) orelse {
+        std.debug.print("Error: Missing input path\n\n{s}", .{USAGE});
         std.process.exit(1);
     };
 
-    // Create output directory if it doesn't exist
-    std.fs.cwd().makePath(output_dir) catch |err| {
-        std.debug.print("Error: Cannot create output directory '{s}': {s}\n", .{
-            output_dir,
-            @errorName(err),
-        });
+    const output_path = handleArg(args.next()) orelse {
+        std.debug.print("Error: Missing output path\n\n{s}", .{USAGE});
         std.process.exit(1);
     };
 
-    std.debug.print("Scanning '{s}' for .zempl files...\n", .{input_dir});
+    // handle all args for help
+    while (handleArg(args.next())) |_| {}
 
-    // Scan for .zempl files
-    const file_entries = files.scanDirectory(allocator, input_dir, output_dir) catch |err| {
-        std.debug.print("Error scanning directory: {s}\n", .{@errorName(err)});
-        std.process.exit(1);
+    const written_files = handleDir(allocator, input_path, output_path) catch {
+        std.debug.print("Error: Error while processing template files\n", .{});
+        std.process.exit(3);
     };
-    defer {
-        for (file_entries) |entry| {
-            entry.deinit(allocator);
-        }
-        allocator.free(file_entries);
-    }
+    std.debug.print("Generated {d} template files\n", .{written_files});
+}
 
-    if (file_entries.len == 0) {
-        std.debug.print("No .zempl files found in '{s}'\n", .{input_dir});
-        std.process.exit(0);
-    }
+fn handleDir(allocator: std.mem.Allocator, input_path: []const u8, output_path: []const u8) Error!usize {
+    var input_dir = std.fs.cwd().openDir(input_path, .{ .iterate = true }) catch {
+        std.debug.print("Error: Could not open directory '{s}' for iteration\n", .{input_path});
+        return error.IoError;
+    };
+    defer input_dir.close();
 
-    std.debug.print("Found {d} .zempl file(s)\n\n", .{file_entries.len});
+    std.fs.cwd().makePath(output_path) catch {
+        std.debug.print("Error: Could not create directory '{s}'\n", .{output_path});
+        return error.IoError;
+    };
 
-    // Process each file
-    var success_count: usize = 0;
-    var error_count: usize = 0;
+    var dir_content_writer: std.Io.Writer.Allocating = .init(allocator);
+    defer dir_content_writer.deinit();
 
-    for (file_entries) |entry| {
-        std.debug.print("Processing: {s} -> {s}\n", .{ entry.relative_path, entry.output_path });
+    var written: usize = 0;
 
-        files.processFile(allocator, entry.input_path, entry.output_path) catch |err| {
-            std.debug.print("  Error: {s}\n", .{@errorName(err)});
-            error_count += 1;
-            continue;
-        };
+    var it = input_dir.iterate();
+    while (it.next() catch return error.IoError) |entry| {
+        switch (entry.kind) {
+            .directory => {
+                const entry_input_path = try std.fs.path.join(allocator, &.{ input_path, entry.name });
+                defer allocator.free(entry_input_path);
 
-        success_count += 1;
-        std.debug.print("  ✓ Generated\n", .{});
-    }
+                const entry_output_path = try std.fs.path.join(allocator, &.{ output_path, entry.name });
+                defer allocator.free(entry_output_path);
 
-    std.debug.print("\n", .{});
+                const cnt = try handleDir(allocator, entry_input_path, entry_output_path);
+                written += cnt;
 
-    // Generate templates.zig index file
-    if (success_count > 0) {
-        std.debug.print("Generating templates.zig...\n", .{});
-        files.generateTemplatesZig(allocator, output_dir, file_entries) catch |err| {
-            std.debug.print("  Error generating templates.zig: {s}\n", .{@errorName(err)});
-            error_count += 1;
-        };
-        if (error_count == 0) {
-            std.debug.print("  ✓ Generated templates.zig\n", .{});
+                if (cnt > 0) {
+                    dir_content_writer.writer.print("pub const {s} = @import(\"{s}/_templates.zig\");\n", .{ entry.name, entry.name }) catch return error.IoError;
+                }
+            },
+            .file => {
+                const ext = std.fs.path.extension(entry.name);
+                if (!std.mem.eql(u8, ext, ".zempl")) continue;
+
+                const template_name = entry.name[0 .. entry.name.len - ext.len];
+
+                const entry_input_path = try std.fs.path.join(allocator, &.{ input_path, entry.name });
+                defer allocator.free(entry_input_path);
+
+                const out_name = try std.fmt.allocPrint(allocator, "{s}.zig", .{template_name});
+                defer allocator.free(out_name);
+                const entry_output_path = try std.fs.path.join(allocator, &.{ output_path, out_name });
+                defer allocator.free(entry_output_path);
+
+                const cnt = try handleFile(allocator, entry_input_path, entry_output_path);
+                written += cnt;
+
+                if (cnt > 0) {
+                    dir_content_writer.writer.print("pub const {s} = @import(\"{s}\");\n", .{ template_name, out_name }) catch return error.IoError;
+                }
+            },
+            else => {
+                std.debug.print("Error: Skipping path '{s}'. Must be file or directory.\n", .{input_path});
+            },
         }
     }
 
-    // Print summary
-    std.debug.print("\n{d} file(s) generated successfully\n", .{success_count});
-    if (error_count > 0) {
-        std.debug.print("{d} file(s) failed\n", .{error_count});
-        std.process.exit(1);
+    if (written > 0) {
+        const dir_content_path = try std.fs.path.join(allocator, &.{ output_path, "_templates.zig" });
+        defer allocator.free(dir_content_path);
+        const dir_content_file = std.fs.cwd().createFile(dir_content_path, .{}) catch return error.IoError;
+        defer dir_content_file.close();
+        dir_content_file.writeAll(dir_content_writer.written()) catch return error.IoError;
     }
+
+    return written;
 }
 
-test "CLI argument parsing" {
-    // Just verify the usage message exists
-    try std.testing.expect(USAGE.len > 0);
+fn handleFile(allocator: std.mem.Allocator, input_path: []const u8, output_path: []const u8) Error!usize {
+    const source = std.fs.cwd().readFileAllocOptions(allocator, input_path, 1024 * 1024, null, .fromByteUnits(1), 0) catch |err| {
+        switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => {
+                std.debug.print("Error: Could not read file '{s}'\n", .{input_path});
+                return error.IoError;
+            },
+        }
+    };
+    defer allocator.free(source);
+
+    const output_dir = std.fs.path.dirname(output_path) orelse ".";
+    std.fs.cwd().makePath(output_dir) catch {
+        std.debug.print("Error: Could not create directory '{s}'\n", .{output_path});
+        return error.IoError;
+    };
+
+    var lexer = Lexer.init(source, input_path);
+    var parser = Parser.init(&lexer, allocator, input_path);
+
+    const file = parser.parseFile() catch |err| {
+        switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return 0,
+        }
+    };
+    defer file.deinit(allocator);
+
+    var output_file = std.fs.cwd().createFile(output_path, .{}) catch {
+        std.debug.print("Error: Could not create file '{s}'\n", .{output_path});
+        return error.IoError;
+    };
+    defer output_file.close();
+
+    var buffer: [4096]u8 = undefined;
+    var file_writer = output_file.writer(&buffer);
+    const writer = &file_writer.interface;
+
+    var codegen = CodeGenerator.init(writer);
+    codegen.generateFile(file) catch {
+        std.debug.print("Error: Error while writing file '{s}'\n", .{output_path});
+        return error.IoError;
+    };
+
+    writer.flush() catch {
+        std.debug.print("Error: Error while writing file '{s}'\n", .{output_path});
+        return error.IoError;
+    };
+
+    return 1;
 }
 
-// Reference all declarations in zempl module to ensure tests are compiled
-// This is the standard Zig pattern for multi-file test discovery
 test {
+    std.testing.refAllDecls(@import("zempl/ast.zig"));
+    std.testing.refAllDecls(@import("zempl/codegen.zig"));
+    std.testing.refAllDecls(@import("zempl/error.zig"));
     std.testing.refAllDecls(@import("zempl/lexer.zig"));
     std.testing.refAllDecls(@import("zempl/parser.zig"));
-    std.testing.refAllDecls(@import("zempl/ast.zig"));
     std.testing.refAllDecls(@import("zempl/zig_parse.zig"));
-    std.testing.refAllDecls(@import("zempl/error.zig"));
-    std.testing.refAllDecls(@import("zempl/codegen.zig"));
-    std.testing.refAllDecls(@import("zempl/files.zig"));
 }
