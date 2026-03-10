@@ -7,7 +7,7 @@ zempl Heading(title: []const u8) {
 zempl Button(text: []const u8, disabled: bool) {
     <button 
         class="btn"
-        disabled=disabled
+        disabled={disabled}
         type="button"
     >
         {text}
@@ -39,8 +39,9 @@ zempl List(items: []const []const u8) {
     </ul>
 }
 
-zempl Countdown(n: u32) {
+zempl Countdown(count: u32) {
     <div class="countdown">
+        @{ var n = count; }
         @while (n > 0) {
             <span>{n}</span>
             @{ n -= 1; }
@@ -54,10 +55,11 @@ zempl Link(href: []const u8, userId: u32) {
         var buf: [100]u8 = undefined;
         const url = try std.fmt.bufPrint(&buf, "/{s}/{d}", .{ href, userId });
     }
-    <a href=url>Click here</a>
+    <a href={url}>Click here</a>
 }
 
-zempl Page(name: []const u8) {
+pub zempl Page(name: []const u8) {
+    <!DOCTYPE html>
     <html>
         <head>
             <title>{name}</title>

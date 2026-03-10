@@ -32,6 +32,7 @@ pub const ParserError = error{
     ExpectedRParen,
     ExpectedPipe,
     ExpectedIdentifier,
+    ExpectedString,
     ExpectedComma,
     UnknownZemplConstruct,
     OutOfMemory,
@@ -163,8 +164,13 @@ pub const Parser = struct {
         const params = try self.parseParamDeclList();
         errdefer self.allocator.free(params);
 
-        // Parse body (HTML content) - expects opening brace internally
-        const body = try self.parseHtmlBody();
+        const lbrace_token = self.lexer.next();
+        if (lbrace_token.token_type != .lbrace) {
+            return error.ExpectedLBrace;
+        }
+
+        // Parse body (HTML content)
+        const body = try self.parseHtmlBody("");
 
         return ZemplComponent{
             .name = name,
@@ -176,14 +182,8 @@ pub const Parser = struct {
     }
 
     /// Parse HTML body content
-    /// Expects the opening brace to be the next token
-    fn parseHtmlBody(self: *Parser) ParserError![]HtmlNode {
-        // Expect opening brace
-        const lbrace_token = self.lexer.next();
-        if (lbrace_token.token_type != .lbrace) {
-            return error.ExpectedLBrace;
-        }
-
+    /// current_tag_name is an empty string if we are not inside a tag but a block enclosed by braces
+    fn parseHtmlBody(self: *Parser, current_tag_name: []const u8) ParserError![]HtmlNode {
         var nodes = std.ArrayList(HtmlNode).empty;
         errdefer {
             for (nodes.items) |*node| {
@@ -198,11 +198,15 @@ pub const Parser = struct {
             token: switch (token.token_type) {
                 .rbrace => {
                     _ = self.lexer.next(); // consume the brace
+                    if (current_tag_name.len > 0)
+                        return error.UnexpectedRBrace;
                     break;
                 },
                 .langle => {
-                    const node = try self.parseHtmlElementOrComment();
-                    try nodes.append(self.allocator, node);
+                    const node_opt = try self.parseHtmlElementOrComment(current_tag_name);
+                    if (node_opt) |node| {
+                        try nodes.append(self.allocator, node);
+                    } else break;
                 },
                 .lbrace => {
                     const node = try self.parseExpressionInterpolation();
@@ -231,23 +235,32 @@ pub const Parser = struct {
     }
 
     /// Parse an HTML element, comment, or DOCTYPE
-    fn parseHtmlElementOrComment(self: *Parser) ParserError!HtmlNode {
+    /// Returns null if this closes the current element
+    fn parseHtmlElementOrComment(self: *Parser, current_tag_name: []const u8) ParserError!?HtmlNode {
         const location = self.lexer.next().location; // consume '<'
 
         // Check for comment or DOCTYPE
         const next_token = self.lexer.peek();
         if (next_token.token_type == .bang) {
-            return self.parseDeclaration(location);
+            _ = self.lexer.next(); // consume '/'
+            return try self.parseDeclaration(location);
         }
 
         // Check for closing tag
         if (next_token.token_type == .slash) {
             _ = self.lexer.next(); // consume '/'
-            return error.UnexpectedClosingTag;
+            const name = self.lexer.next();
+            if (name.token_type != .identifier)
+                return error.ExpectedIdentifier;
+            if (!std.mem.eql(u8, name.text, current_tag_name))
+                return error.UnexpectedClosingTag;
+            if (self.lexer.next().token_type != .rangle)
+                return error.ExpectedRAngle;
+            return null;
         }
 
         // Parse Element
-        return self.parseElement(location);
+        return try self.parseElement(location);
     }
 
     /// Parse HTML declaration (comment or doctype declaration)
@@ -327,98 +340,12 @@ pub const Parser = struct {
             } };
         }
 
-        // Parse children until closing tag
-        var children = std.ArrayList(HtmlNode).empty;
-        errdefer {
-            for (children.items) |*child| {
-                child.deinit(self.allocator);
-            }
-            children.deinit(self.allocator);
-        }
-
-        // Parse children using nextContent/peekContent
-        while (true) {
-            // Peek using nextContent to see what's coming
-            const content_token = self.lexer.peekContent();
-
-            if (content_token.token_type == .eof) {
-                return error.UnexpectedEof;
-            }
-
-            // If empty text, we're at a delimiter
-            if (content_token.text.len == 0) {
-                const token = self.lexer.peek();
-
-                // Check for closing tag </tagname>
-                if (token.token_type == .langle) {
-                    const saved_pos = self.lexer.getPosition();
-                    _ = self.lexer.next(); // consume '<'
-                    const slash_token = self.lexer.peek();
-                    if (slash_token.token_type == .slash) {
-                        _ = self.lexer.next(); // consume '/'
-                        const close_tag_token = self.lexer.next();
-                        if (close_tag_token.token_type == .identifier and
-                            std.mem.eql(u8, close_tag_token.text, tag_name))
-                        {
-                            // Found matching closing tag
-                            const end_rangle = self.lexer.next();
-                            if (end_rangle.token_type != .rangle) {
-                                return error.ExpectedRAngle;
-                            }
-                            break;
-                        } else {
-                            // Not matching, restore and parse as element
-                            self.lexer.index = saved_pos;
-                            const child = try self.parseHtmlElementOrComment();
-                            try children.append(self.allocator, child);
-                            continue;
-                        }
-                    } else {
-                        // Not a closing tag, restore and parse as element
-                        self.lexer.index = saved_pos;
-                        const child = try self.parseHtmlElementOrComment();
-                        try children.append(self.allocator, child);
-                        continue;
-                    }
-                }
-
-                switch (token.token_type) {
-                    .rbrace => return error.UnexpectedRBrace,
-                    .langle => {
-                        const child = try self.parseHtmlElementOrComment();
-                        try children.append(self.allocator, child);
-                    },
-                    .lbrace => {
-                        const child = try self.parseExpressionInterpolation();
-                        try children.append(self.allocator, child);
-                    },
-                    .at_lbrace => {
-                        const child = try self.parseZemplConstruct();
-                        try children.append(self.allocator, child);
-                    },
-                    .identifier => {
-                        if (std.mem.startsWith(u8, token.text, "@")) {
-                            const child = try self.parseZemplConstruct();
-                            try children.append(self.allocator, child);
-                        } else {
-                            _ = self.lexer.next();
-                        }
-                    },
-                    else => {
-                        _ = self.lexer.next();
-                    },
-                }
-            } else {
-                // We have actual text content
-                const child = try self.parseTextContent();
-                try children.append(self.allocator, child);
-            }
-        }
+        const children = try self.parseHtmlBody(tag_name);
 
         return HtmlNode{ .element = .{
             .tag_name = tag_name,
             .attributes = try attributes.toOwnedSlice(self.allocator),
-            .children = try children.toOwnedSlice(self.allocator),
+            .children = children,
             .is_void = false,
             .location = location,
         } };
@@ -436,24 +363,22 @@ pub const Parser = struct {
         var value: []const u8 = "";
 
         // Check for =value
-        const next_token = self.lexer.peek();
-        if (next_token.token_type == .equal) {
+        if (self.lexer.peek().token_type == .equal) {
             _ = self.lexer.next(); // consume '='
 
-            const value_token = self.lexer.peek();
-            if (value_token.token_type == .text or value_token.token_type == .identifier) {
-                const val_token = self.lexer.next();
-                value = try self.allocator.dupe(u8, val_token.text);
-            } else if (value_token.token_type == .lbrace) {
-                // Attribute value is a zempl expression
-                const expr_node = try self.parseExpressionInterpolation();
-                switch (expr_node) {
-                    .expression => |expr| {
-                        value = expr.expr; // Take ownership
-                    },
-                    else => return error.ExpectedExpression,
-                }
+            const next_token = self.lexer.peek();
+            if (next_token.token_type == .lbrace) {
+                _ = self.lexer.next();
+                value = try self.parseExpression();
+                if (self.lexer.next().token_type != .rbrace)
+                    return error.ExpectedRBrace;
+            } else {
+                if (next_token.token_type != .string)
+                    return error.ExpectedString;
+                value = try self.allocator.dupe(u8, next_token.text);
             }
+        } else {
+            value = try self.allocator.dupe(u8, "true");
         }
 
         return HtmlAttribute{
@@ -483,25 +408,14 @@ pub const Parser = struct {
     fn parseExpressionInterpolation(self: *Parser) ParserError!HtmlNode {
         const lbrace_token = self.lexer.next(); // consume '{'
 
-        const start_pos = self.lexer.getPosition();
+        const expr = try self.parseExpression();
+        errdefer self.allocator.free(expr);
 
-        // Find the matching }
-        var brace_depth: i32 = 1;
-        while (brace_depth > 0) {
-            const token = self.lexer.next();
-            switch (token.token_type) {
-                .lbrace => brace_depth += 1,
-                .rbrace => brace_depth -= 1,
-                .eof => return error.UnexpectedEof,
-                else => {},
-            }
-        }
-
-        const end_pos = self.lexer.getPosition() - 1; // exclude the closing }
-        const expr_text = self.lexer.source[start_pos..end_pos];
+        if (self.lexer.next().token_type != .rbrace)
+            return error.ExpectedRBrace;
 
         return HtmlNode{ .expression = .{
-            .expr = try self.allocator.dupe(u8, expr_text),
+            .expr = expr,
             .location = lbrace_token.location,
         } };
     }
@@ -517,8 +431,6 @@ pub const Parser = struct {
             return self.parseForLoop();
         } else if (std.mem.eql(u8, construct_name, "@while")) {
             return self.parseWhileLoop();
-        } else if (std.mem.eql(u8, construct_name, "@{")) {
-            return self.parseCodeBlock();
         } else if (construct_name.len > 1 and std.ascii.isUpper(construct_name[1])) {
             // Component call: @ComponentName
             return self.parseComponentCall(construct_name);
@@ -529,21 +441,23 @@ pub const Parser = struct {
 
     /// Parse @if statement
     fn parseIfStatement(self: *Parser) ParserError!HtmlNode {
-        const lparen_token = self.lexer.next();
-        if (lparen_token.token_type != .lparen) {
+        if (self.lexer.next().token_type != .lparen) {
             return error.ExpectedLParen;
         }
 
         const condition = try self.parseExpression();
         errdefer self.allocator.free(condition);
 
-        const rparen_token = self.lexer.next();
-        if (rparen_token.token_type != .rparen) {
+        if (self.lexer.next().token_type != .rparen) {
             return error.ExpectedRParen;
         }
 
+        if (self.lexer.next().token_type != .lbrace) {
+            return error.ExpectedLBrace;
+        }
+
         // Expect { then_body }
-        const then_body = try self.parseHtmlBody();
+        const then_body = try self.parseHtmlBody("");
         errdefer {
             for (then_body) |*node| {
                 node.deinit(self.allocator);
@@ -556,7 +470,12 @@ pub const Parser = struct {
         const next_token = self.lexer.peek();
         if (next_token.token_type == .identifier and std.mem.eql(u8, next_token.text, "@else")) {
             _ = self.lexer.next(); // consume @else
-            else_body = try self.parseHtmlBody();
+
+            if (self.lexer.next().token_type != .lbrace) {
+                return error.ExpectedLBrace;
+            }
+
+            else_body = try self.parseHtmlBody("");
         }
 
         return HtmlNode{ .control_flow = .{ .if_stmt = .{
@@ -621,8 +540,11 @@ pub const Parser = struct {
             return error.ExpectedPipe;
         }
 
-        // Parse body
-        const body = try self.parseHtmlBody();
+        if (self.lexer.next().token_type != .lbrace) {
+            return error.ExpectedLBrace;
+        }
+
+        const body = try self.parseHtmlBody("");
 
         return HtmlNode{ .control_flow = .{ .for_loop = .{
             .captures = try captures.toOwnedSlice(self.allocator),
@@ -651,8 +573,11 @@ pub const Parser = struct {
             return error.ExpectedRParen;
         }
 
-        // Parse body
-        const body = try self.parseHtmlBody();
+        if (self.lexer.next().token_type != .lbrace) {
+            return error.ExpectedLBrace;
+        }
+
+        const body = try self.parseHtmlBody("");
 
         return HtmlNode{ .control_flow = .{ .while_loop = .{
             .condition = condition,
@@ -930,7 +855,7 @@ test "parser handles void elements" {
 }
 
 test "parser handles HTML attributes" {
-    const source = "zempl Hello() { <div class=\"test\" id=main>Content</div> }";
+    const source = "zempl Hello() { <div class=\"test\" id={main}>Content</div> }";
     var lexer = Lexer.init(source, "test.zempl");
 
     var parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
@@ -941,7 +866,7 @@ test "parser handles HTML attributes" {
     // Attributes: class, test (value of class), id, main (value of id)
     try std.testing.expect(file.items[0].component.body[0].element.attributes.len >= 2);
     try std.testing.expectEqualStrings("class", file.items[0].component.body[0].element.attributes[0].name);
-    try std.testing.expectEqualStrings("id", file.items[0].component.body[0].element.attributes[2].name);
+    try std.testing.expectEqualStrings("id", file.items[0].component.body[0].element.attributes[1].name);
 }
 
 // ============================================================================
@@ -1035,7 +960,7 @@ test "parseCodeBlock handles simple code block" {
     defer file.deinit(std.testing.allocator);
 
     try std.testing.expect(file.items[0].component.body[0].element.children[0] == .code_block);
-    try std.testing.expect(file.items[0].component.body[0].element.children[0].code_block.statements.len > 0);
+    try std.testing.expectEqualStrings(" const x = 1; ", file.items[0].component.body[0].element.children[0].code_block.statements);
 }
 
 test "parseCodeBlock handles multiline code block" {
@@ -1212,7 +1137,7 @@ test "parseElementStart handles element with boolean attribute" {
     try std.testing.expectEqualStrings("input", file.items[0].component.body[0].element.tag_name);
     try std.testing.expect(file.items[0].component.body[0].element.attributes.len == 1);
     try std.testing.expectEqualStrings("disabled", file.items[0].component.body[0].element.attributes[0].name);
-    try std.testing.expectEqualStrings("", file.items[0].component.body[0].element.attributes[0].value);
+    try std.testing.expectEqualStrings("true", file.items[0].component.body[0].element.attributes[0].value);
 }
 
 test "parseAttribute handles attribute with expression value" {

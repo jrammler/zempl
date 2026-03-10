@@ -1,6 +1,6 @@
 const std = @import("std");
 
-pub fn build(b: *std.Build) void {
+pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
@@ -10,7 +10,6 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/main.zig"),
             .target = target,
             .optimize = optimize,
-            .imports = &.{},
         }),
     });
 
@@ -36,4 +35,47 @@ pub fn build(b: *std.Build) void {
 
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_exe_tests.step);
+
+    try integrationTests(b);
+}
+
+pub fn addTemplates(b: *std.Build, exe: *std.Build.Step.Compile, input_dir: std.Build.LazyPath) !void {
+    const zempl = b.addExecutable(.{
+        .name = "zempl",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/main.zig"),
+            .target = b.graph.host,
+        }),
+    });
+    const zempl_step = b.addRunArtifact(zempl);
+    zempl_step.has_side_effects = true;
+    zempl_step.addDirectoryArg(input_dir);
+    // _ = zempl_step.addPrefixedDepFileOutputArg("--depfile=", "templates.d");
+    const template_dir = zempl_step.addOutputDirectoryArg("zempl_templates");
+
+    const templates_module = b.createModule(.{
+        .root_source_file = template_dir.path(b, "_templates.zig"),
+    });
+    templates_module.addAnonymousImport("zempl_runtime", .{
+        .root_source_file = b.path("runtime/runtime.zig"),
+    });
+
+    exe.root_module.addImport("templates", templates_module);
+}
+
+fn integrationTests(b: *std.Build) !void {
+    const integration_tests = b.addExecutable(.{
+        .name = "integration_tests",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("test/integration_tests.zig"),
+            .target = b.graph.host,
+        }),
+    });
+
+    try addTemplates(b, integration_tests, b.path("test/templates"));
+
+    const integration_test_step = b.step("integration", "Run the integration tests");
+
+    const integration_test_cmd = b.addRunArtifact(integration_tests);
+    integration_test_step.dependOn(&integration_test_cmd.step);
 }

@@ -60,7 +60,7 @@ pub const CodeGenerator = struct {
         // Function signature
         try self.writer.writeAll("fn ");
         try self.writer.writeAll(component.name);
-        try self.writer.writeAll("(writer: @import(\"std\").Io.Writer");
+        try self.writer.writeAll("(writer: *@import(\"std\").Io.Writer");
 
         // Add component parameters
         if (component.params.len > 2) { // "()" is empty
@@ -106,12 +106,7 @@ pub const CodeGenerator = struct {
             try self.writer.writeAll("try @import(\"zempl_runtime\").escapeAttribute(writer, \"");
             try self.writer.writeAll(attr.name);
             try self.writer.writeAll("\", ");
-            if (attr.value.len == 0) {
-                // Boolean attribute without value - pass true to always render it
-                try self.writer.writeAll("true");
-            } else {
-                try self.writer.writeAll(attr.value);
-            }
+            try self.writer.writeAll(attr.value);
             try self.writer.writeAll(");\n");
         }
 
@@ -312,7 +307,7 @@ test "codegen generates simple component" {
 
     const output = allocating.written();
     try std.testing.expectEqualStrings(
-        \\fn Hello(writer: @import("std").Io.Writer) !void {
+        \\fn Hello(writer: *@import("std").Io.Writer) !void {
         \\    try writer.writeAll("Hello World");
         \\}
         \\
@@ -344,7 +339,7 @@ test "codegen generates public component" {
 
     const output = allocating.written();
     try std.testing.expectEqualStrings(
-        \\pub fn Public(writer: @import("std").Io.Writer) !void {
+        \\pub fn Public(writer: *@import("std").Io.Writer) !void {
         \\}
         \\
     , output);
@@ -375,7 +370,7 @@ test "codegen generates component with params" {
 
     const output = allocating.written();
     try std.testing.expectEqualStrings(
-        \\fn Greeting(writer: @import("std").Io.Writer, name: []const u8) !void {
+        \\fn Greeting(writer: *@import("std").Io.Writer, name: []const u8) !void {
         \\}
         \\
     , output);

@@ -50,6 +50,11 @@ pub fn parseExpression(allocator: std.mem.Allocator, source: [:0]const u8) Error
         .scratch = .{},
     };
 
+    defer parse.nodes.deinit(allocator);
+    defer parse.extra_data.deinit(allocator);
+    defer parse.scratch.deinit(allocator);
+    defer parse.errors.deinit(allocator);
+
     _ = try parse.parseExpr() orelse return error.ParseError;
 
     // Get how many tokens were consumed
@@ -68,13 +73,6 @@ pub fn parseExpression(allocator: std.mem.Allocator, source: [:0]const u8) Error
     // Trim trailing whitespace from the expression
     const trimmed = std.mem.trim(u8, source_text, &std.ascii.whitespace);
     const result_str = try allocator.dupe(u8, trimmed);
-
-    // Clean up
-    parse.nodes.deinit(allocator);
-    parse.extra_data.deinit(allocator);
-    parse.scratch.deinit(allocator);
-    parse.errors.deinit(allocator);
-    // Note: tokens_slice is cleaned up by defer tokens.deinit(allocator)
 
     return ParseResult{
         .source_text = result_str,

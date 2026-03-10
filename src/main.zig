@@ -161,7 +161,10 @@ fn handleFile(allocator: std.mem.Allocator, input_path: []const u8, output_path:
     const file = parser.parseFile() catch |err| {
         switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
-            else => return 0,
+            else => {
+                std.debug.print("Error: Error while parsing file '{s}': {}\n", .{ input_path, err });
+                return 0;
+            },
         }
     };
     defer file.deinit(allocator);

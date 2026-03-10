@@ -9,6 +9,7 @@ pub const TokenType = enum {
 
     // Content tokens
     identifier,
+    string,
     text,
 
     // Zempl-specific keywords and symbols
@@ -163,6 +164,24 @@ pub const Lexer = struct {
         return Token.init(.identifier, location, text);
     }
 
+    /// Scan a string literal
+    fn scanString(self: *Lexer) Token {
+        const location = self.getLocation();
+        const start = self.index;
+
+        // Consume first character (already validated as identifier start)
+        _ = self.advance();
+
+        // Consume rest of identifier
+        while (self.advance()) |ch| {
+            if (ch == '"')
+                break;
+        }
+
+        const text = self.source[start..self.index];
+        return Token.init(.string, location, text);
+    }
+
     /// Get next token (general purpose - for tags, attributes, etc.)
     pub fn next(self: *Lexer) Token {
         self.skipWhitespace();
@@ -243,6 +262,11 @@ pub const Lexer = struct {
             }
             // Otherwise it's an identifier starting with @
             return self.scanIdentifier();
+        }
+
+        // Check for "
+        if (c == '"') {
+            return self.scanString();
         }
 
         // Identifier
