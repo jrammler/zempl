@@ -1,5 +1,4 @@
 const std = @import("std");
-const Location = @import("lexer.zig").Location;
 
 /// HTML element node
 pub const HtmlElement = struct {
@@ -7,7 +6,6 @@ pub const HtmlElement = struct {
     attributes: []HtmlAttribute,
     children: []HtmlNode,
     is_void: bool,
-    location: Location,
 
     pub fn deinit(self: HtmlElement, allocator: std.mem.Allocator) void {
         allocator.free(self.tag_name);
@@ -25,8 +23,7 @@ pub const HtmlElement = struct {
 /// HTML attribute (name=value)
 pub const HtmlAttribute = struct {
     name: []const u8,
-    value: []const u8, // Source text of Zig expression
-    location: Location,
+    value: []const u8,
 
     pub fn deinit(self: HtmlAttribute, allocator: std.mem.Allocator) void {
         allocator.free(self.name);
@@ -37,7 +34,6 @@ pub const HtmlAttribute = struct {
 /// HTML text content node
 pub const HtmlText = struct {
     content: []const u8,
-    location: Location,
 
     pub fn deinit(self: HtmlText, allocator: std.mem.Allocator) void {
         allocator.free(self.content);
@@ -47,7 +43,6 @@ pub const HtmlText = struct {
 /// HTML comment node (<!-- -->)
 pub const HtmlDeclaration = struct {
     content: []const u8,
-    location: Location,
 
     pub fn deinit(self: HtmlDeclaration, allocator: std.mem.Allocator) void {
         allocator.free(self.content);
@@ -80,10 +75,9 @@ pub const HtmlNode = union(enum) {
 /// Zempl component definition
 pub const ZemplComponent = struct {
     name: []const u8,
-    is_public: bool, // pub zempl vs zempl
-    params: []const u8, // Source text of parameter list (e.g., "(title: []const u8)")
-    body: []HtmlNode, // Body is HTML content
-    location: Location,
+    is_public: bool,
+    params: []const u8,
+    body: []HtmlNode,
 
     pub fn deinit(self: ZemplComponent, allocator: std.mem.Allocator) void {
         allocator.free(self.name);
@@ -97,8 +91,7 @@ pub const ZemplComponent = struct {
 
 /// Expression interpolation {expr}
 pub const ZemplExpression = struct {
-    expr: []const u8, // Source text of Zig expression
-    location: Location,
+    expr: []const u8,
 
     pub fn deinit(self: ZemplExpression, allocator: std.mem.Allocator) void {
         allocator.free(self.expr);
@@ -107,8 +100,7 @@ pub const ZemplExpression = struct {
 
 /// Code block @{statements}
 pub const ZemplCodeBlock = struct {
-    statements: []const u8, // Source text of Zig statements
-    location: Location,
+    statements: []const u8,
 
     pub fn deinit(self: ZemplCodeBlock, allocator: std.mem.Allocator) void {
         allocator.free(self.statements);
@@ -118,8 +110,7 @@ pub const ZemplCodeBlock = struct {
 /// Component call @Component(args)
 pub const ZemplComponentCall = struct {
     component_name: []const u8,
-    args: []ZemplArg, // Arguments to the component
-    location: Location,
+    args: []ZemplArg,
 
     pub fn deinit(self: ZemplComponentCall, allocator: std.mem.Allocator) void {
         allocator.free(self.component_name);
@@ -132,8 +123,7 @@ pub const ZemplComponentCall = struct {
 
 /// Argument in a component call
 pub const ZemplArg = struct {
-    expr: []const u8, // Source text of Zig expression for the argument
-    location: Location,
+    expr: []const u8,
 
     pub fn deinit(self: ZemplArg, allocator: std.mem.Allocator) void {
         allocator.free(self.expr);
@@ -157,10 +147,9 @@ pub const ZemplControlFlow = union(enum) {
 
 /// @if (condition) { then_body } @else { else_body }
 pub const ZemplIf = struct {
-    condition: []const u8, // Source text of Zig expression for condition
+    condition: []const u8,
     then_body: []HtmlNode,
-    else_body: ?[]HtmlNode, // Optional else branch
-    location: Location,
+    else_body: ?[]HtmlNode,
 
     pub fn deinit(self: *ZemplIf, allocator: std.mem.Allocator) void {
         allocator.free(self.condition);
@@ -179,10 +168,9 @@ pub const ZemplIf = struct {
 
 /// @for (item in iterable) { body }
 pub const ZemplFor = struct {
-    captures: [][]const u8, // Variable name like "item"
-    iterables: [][]const u8, // Source text of Zig expression for iterable
+    captures: [][]const u8,
+    iterables: [][]const u8,
     body: []HtmlNode,
-    location: Location,
 
     pub fn deinit(self: *ZemplFor, allocator: std.mem.Allocator) void {
         for (self.captures) |capture| {
@@ -201,11 +189,9 @@ pub const ZemplFor = struct {
 };
 
 /// @while (condition) { body }
-/// @while (condition) { body } or @while (condition) |capture| { body }
 pub const ZemplWhile = struct {
-    condition: []const u8, // Source text of Zig expression for condition
+    condition: []const u8,
     body: []HtmlNode,
-    location: Location,
 
     pub fn deinit(self: *ZemplWhile, allocator: std.mem.Allocator) void {
         allocator.free(self.condition);
@@ -218,9 +204,8 @@ pub const ZemplWhile = struct {
 
 /// Zempl import: const NAME = zimport("path.zempl");
 pub const ZemplImport = struct {
-    const_name: []const u8, // "ui" in: const ui = zimport("file.zempl");
-    path: []const u8, // "file.zempl" (raw, unresolved)
-    location: Location,
+    const_name: []const u8,
+    path: []const u8,
     is_public: bool,
 
     pub fn deinit(self: ZemplImport, allocator: std.mem.Allocator) void {
@@ -247,7 +232,6 @@ pub const ZemplItem = union(enum) {
 /// Complete zempl file AST
 pub const ZemplFile = struct {
     items: []ZemplItem,
-    location: Location,
 
     pub fn deinit(self: ZemplFile, allocator: std.mem.Allocator) void {
         for (self.items) |item| {

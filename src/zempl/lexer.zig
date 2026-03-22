@@ -3,13 +3,15 @@ const std = @import("std");
 pub const Location = struct {
     file_path: []const u8,
     row: usize,
-    column: usize,
+    row_start: usize,
+    index: usize,
 
     pub fn format(
         self: Location,
         writer: anytype,
     ) !void {
-        try writer.print("{s}:{d}:{d}", .{ self.file_path, self.row, self.column });
+        const column = self.index - self.row_start + 1;
+        try writer.print("{s}:{d}:{d}", .{ self.file_path, self.row, column });
     }
 };
 
@@ -63,7 +65,7 @@ pub const Lexer = struct {
     file_path: []const u8,
     index: usize,
     row: usize,
-    column: usize,
+    row_start: usize,
 
     pub fn init(source: [:0]const u8, file_path: []const u8) Lexer {
         return .{
@@ -71,7 +73,7 @@ pub const Lexer = struct {
             .file_path = file_path,
             .index = 0,
             .row = 1,
-            .column = 1,
+            .row_start = 0,
         };
     }
 
@@ -85,7 +87,8 @@ pub const Lexer = struct {
         return .{
             .file_path = self.file_path,
             .row = self.row,
-            .column = self.column,
+            .row_start = self.row_start,
+            .index = self.index,
         };
     }
 
@@ -125,9 +128,7 @@ pub const Lexer = struct {
         // Update line and column
         if (ch == '\n') {
             self.row += 1;
-            self.column = 1;
-        } else {
-            self.column += 1;
+            self.row_start = self.index;
         }
 
         return ch;
@@ -318,23 +319,23 @@ pub const Lexer = struct {
 
     pub fn peek(self: *Lexer) Token {
         const saved_index = self.index;
-        const saved_line = self.row;
-        const saved_column = self.column;
+        const saved_row = self.row;
+        const saved_row_start = self.row_start;
         const token = self.next();
         self.index = saved_index;
-        self.row = saved_line;
-        self.column = saved_column;
+        self.row = saved_row;
+        self.row_start = saved_row_start;
         return token;
     }
 
     pub fn peekContent(self: *Lexer) Token {
         const saved_index = self.index;
-        const saved_line = self.row;
-        const saved_column = self.column;
+        const saved_row = self.row;
+        const saved_row_start = self.row_start;
         const token = self.nextContent();
         self.index = saved_index;
-        self.row = saved_line;
-        self.column = saved_column;
+        self.row = saved_row;
+        self.row_start = saved_row_start;
         return token;
     }
 };
@@ -532,7 +533,8 @@ test "Invalid token" {
     try std.testing.expectEqual(TokenType.invalid, token.token_type);
     try std.testing.expectEqualStrings("$", token.text);
     try std.testing.expectEqual(@as(usize, 1), token.location.row);
-    try std.testing.expectEqual(@as(usize, 5), token.location.column);
+    try std.testing.expectEqual(@as(usize, 0), token.location.row_start);
+    try std.testing.expectEqual(@as(usize, 4), token.location.index);
 }
 
 test "Line and column tracking" {
@@ -543,13 +545,15 @@ test "Line and column tracking" {
     try std.testing.expectEqual(TokenType.identifier, token.token_type);
     try std.testing.expectEqualStrings("div", token.text);
     try std.testing.expectEqual(@as(usize, 1), token.location.row);
-    try std.testing.expectEqual(@as(usize, 1), token.location.column);
+    try std.testing.expectEqual(@as(usize, 0), token.location.row_start);
+    try std.testing.expectEqual(@as(usize, 0), token.location.index);
 
     token = lexer.next();
     try std.testing.expectEqual(TokenType.identifier, token.token_type);
     try std.testing.expectEqualStrings("span", token.text);
     try std.testing.expectEqual(@as(usize, 2), token.location.row);
-    try std.testing.expectEqual(@as(usize, 1), token.location.column);
+    try std.testing.expectEqual(@as(usize, 4), token.location.row_start);
+    try std.testing.expectEqual(@as(usize, 4), token.location.index);
 }
 
 test "HTML tag with dash" {

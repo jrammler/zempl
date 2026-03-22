@@ -4,19 +4,7 @@ const Location = @import("lexer.zig").Location;
 pub const ErrorDetails = struct {
     location: Location,
     message: []const u8,
-    line: ?[]const u8,
-
-    pub fn init(
-        location: Location,
-        message: []const u8,
-        line: ?[]const u8,
-    ) ErrorDetails {
-        return .{
-            .location = location,
-            .message = message,
-            .line = line,
-        };
-    }
+    line: []const u8,
 
     pub fn format(
         self: ErrorDetails,
@@ -24,46 +12,41 @@ pub const ErrorDetails = struct {
     ) !void {
         try writer.print("{f}:Error: {s}\n", .{ self.location, self.message });
 
-        if (self.line) |line| {
-            try writer.print("  │\n", .{});
-            try writer.print("  │ {s}\n", .{line});
-            try writer.print("  │ {s:>[]}\n", .{ "", self.location.column });
-        }
-    }
-
-    /// Print error to stderr with nice formatting
-    pub fn print(self: ErrorDetails) void {
-        std.debug.print("{f}", .{self});
+        try writer.print("  │\n", .{});
+        try writer.print("  │ {s}\n", .{self.line});
+        const column = self.location.index - self.location.row_start + 1;
+        try writer.print("  │ {[value]s:>[width]}\n", .{ .value = "^", .width = column });
     }
 };
-
-test "Error initialization" {
-    const loc = Location{
-        .file_path = "test.zempl",
-        .row = 10,
-        .column = 5,
-    };
-
-    const err = ErrorDetails.init(
-        loc,
-        "unexpected token",
-        null,
-    );
-
-    try std.testing.expectEqualStrings("test.zempl", err.location.file_path);
-    try std.testing.expectEqual(10, err.location.row);
-    try std.testing.expectEqual(5, err.location.column);
-    try std.testing.expectEqualStrings("unexpected token", err.message);
-}
 
 test "Location formatting" {
     const loc = Location{
         .file_path = "test.zempl",
         .row = 42,
-        .column = 5,
+        .row_start = 0,
+        .index = 4,
     };
 
     var buf: [100]u8 = undefined;
     const result = try std.fmt.bufPrint(&buf, "{f}", .{loc});
     try std.testing.expectEqualStrings("test.zempl:42:5", result);
+}
+
+test "ErrorDetails format with caret" {
+    const loc = Location{
+        .file_path = "test.zempl",
+        .row = 1,
+        .row_start = 0,
+        .index = 4,
+    };
+
+    const err = ErrorDetails{
+        .location = loc,
+        .message = "expected '}'",
+        .line = "div {",
+    };
+
+    var buf: [100]u8 = undefined;
+    const result = try std.fmt.bufPrint(&buf, "{f}", .{err});
+    try std.testing.expectEqualStrings("test.zempl:1:5:Error: expected '}'\n  │\n  │ div {\n  │     ^\n", result);
 }

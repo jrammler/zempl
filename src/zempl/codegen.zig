@@ -304,9 +304,8 @@ test "codegen generates simple component" {
         .is_public = false,
         .params = try allocator.dupe(u8, "()"),
         .body = try allocator.alloc(HtmlNode, 1),
-        .location = undefined,
     };
-    component.body[0] = .{ .text = .{ .content = try allocator.dupe(u8, "Hello World"), .location = undefined } };
+    component.body[0] = .{ .text = .{ .content = try allocator.dupe(u8, "Hello World") } };
 
     defer {
         allocator.free(component.name);
@@ -339,7 +338,6 @@ test "codegen generates public component" {
         .is_public = true,
         .params = try allocator.dupe(u8, "()"),
         .body = &.{},
-        .location = undefined,
     };
 
     defer {
@@ -370,7 +368,6 @@ test "codegen generates component with params" {
         .is_public = false,
         .params = try allocator.dupe(u8, "(name: []const u8)"),
         .body = &.{},
-        .location = undefined,
     };
 
     defer {
@@ -398,7 +395,6 @@ test "codegen generates expression interpolation" {
 
     const expr = ZemplExpression{
         .expr = try allocator.dupe(u8, "title"),
-        .location = undefined,
     };
     defer allocator.free(expr.expr);
 
@@ -424,7 +420,6 @@ test "codegen generates HTML element" {
         .attributes = &.{},
         .children = &.{},
         .is_void = false,
-        .location = undefined,
     };
     defer allocator.free(element.tag_name);
 
@@ -452,7 +447,6 @@ test "codegen generates void element" {
         .attributes = &.{},
         .children = &.{},
         .is_void = true,
-        .location = undefined,
     };
     defer allocator.free(element.tag_name);
 
@@ -478,12 +472,12 @@ test "codegen generates element with attributes" {
     attributes[0] = .{
         .name = try allocator.dupe(u8, "class"),
         .value = try allocator.dupe(u8, "\"container\""), // Static string value
-        .location = undefined,
+
     };
     attributes[1] = .{
         .name = try allocator.dupe(u8, "id"),
         .value = try allocator.dupe(u8, "\"main\""), // Static string with single quotes
-        .location = undefined,
+
     };
 
     const element = HtmlElement{
@@ -491,7 +485,6 @@ test "codegen generates element with attributes" {
         .attributes = attributes,
         .children = &.{},
         .is_void = false,
-        .location = undefined,
     };
 
     defer {
@@ -528,7 +521,7 @@ test "codegen generates element with dynamic attribute values" {
     attributes[0] = .{
         .name = try allocator.dupe(u8, "class"),
         .value = try allocator.dupe(u8, "myClass"), // Expression value (no quotes)
-        .location = undefined,
+
     };
 
     const element = HtmlElement{
@@ -536,7 +529,6 @@ test "codegen generates element with dynamic attribute values" {
         .attributes = attributes,
         .children = &.{},
         .is_void = false,
-        .location = undefined,
     };
 
     defer {
@@ -570,7 +562,6 @@ test "codegen generates HTML declaration" {
 
     const decl = @import("ast.zig").HtmlDeclaration{
         .content = try allocator.dupe(u8, "DOCTYPE html"),
-        .location = undefined,
     };
     defer allocator.free(decl.content);
 
@@ -594,7 +585,6 @@ test "codegen generates component call" {
     const call = ZemplComponentCall{
         .component_name = try allocator.dupe(u8, "Header"),
         .args = &.{},
-        .location = undefined,
     };
     defer allocator.free(call.component_name);
 
@@ -619,9 +609,8 @@ test "codegen generates if statement" {
         .condition = try allocator.dupe(u8, "show"),
         .then_body = try allocator.alloc(HtmlNode, 1),
         .else_body = null,
-        .location = undefined,
     };
-    if_stmt.then_body[0] = .{ .text = .{ .content = try allocator.dupe(u8, "Yes"), .location = undefined } };
+    if_stmt.then_body[0] = .{ .text = .{ .content = try allocator.dupe(u8, "Yes") } };
 
     defer {
         allocator.free(if_stmt.condition);
@@ -652,9 +641,8 @@ test "codegen generates for loop" {
         .iterables = try allocator.dupe([]const u8, &.{try allocator.dupe(u8, "items")}),
         .captures = try allocator.dupe([]const u8, &.{try allocator.dupe(u8, "item")}),
         .body = try allocator.alloc(HtmlNode, 1),
-        .location = undefined,
     };
-    for_loop.body[0] = .{ .text = .{ .content = try allocator.dupe(u8, "."), .location = undefined } };
+    for_loop.body[0] = .{ .text = .{ .content = try allocator.dupe(u8, ".") } };
 
     defer {
         for (for_loop.iterables) |it| allocator.free(it);
@@ -687,9 +675,8 @@ test "codegen generates while loop" {
     var while_loop = ZemplWhile{
         .condition = try allocator.dupe(u8, "running"),
         .body = try allocator.alloc(HtmlNode, 1),
-        .location = undefined,
     };
-    while_loop.body[0] = .{ .text = .{ .content = try allocator.dupe(u8, "."), .location = undefined } };
+    while_loop.body[0] = .{ .text = .{ .content = try allocator.dupe(u8, ".") } };
 
     defer {
         allocator.free(while_loop.condition);

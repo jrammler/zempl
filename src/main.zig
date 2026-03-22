@@ -97,6 +97,9 @@ pub fn main() !void {
 
         const file = parser.parseFile() catch |err| {
             std.debug.print("Error while parsing file '{s}': {}\n", .{ queued_file.src_path, err });
+            if (parser.error_details) |ed| {
+                std.debug.print("{f}\n", .{ed});
+            }
             std.process.exit(1);
         };
         defer file.deinit(allocator);
@@ -158,10 +161,5 @@ fn enqueueRealpath(allocator: std.mem.Allocator, queue: *std.ArrayList(QueueEntr
 }
 
 test {
-    std.testing.refAllDecls(@import("zempl/ast.zig"));
-    std.testing.refAllDecls(@import("zempl/codegen.zig"));
-    std.testing.refAllDecls(@import("zempl/error.zig"));
-    std.testing.refAllDecls(@import("zempl/lexer.zig"));
-    std.testing.refAllDecls(@import("zempl/parser.zig"));
-    std.testing.refAllDecls(@import("zempl/zig_parse.zig"));
+    std.testing.refAllDeclsRecursive(@This());
 }

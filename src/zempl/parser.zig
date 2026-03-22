@@ -11,39 +11,15 @@ const Lexer = @import("lexer.zig").Lexer;
 const Token = @import("lexer.zig").Token;
 const TokenType = @import("lexer.zig").TokenType;
 const Location = @import("lexer.zig").Location;
+const ErrorDetails = @import("error.zig").ErrorDetails;
 const zig_parse = @import("zig_parse.zig");
-
-/// Parser errors
-pub const Error = error{
-    ExpectedZemplKeyword,
-    ExpectedComponentName,
-    ExpectedParamList,
-    ExpectedLBrace,
-    ExpectedRBrace,
-    UnexpectedRBrace,
-    UnexpectedEof,
-    UnexpectedClosingTag,
-    ExpectedTagName,
-    ExpectedRAngle,
-    ExpectedAttributeName,
-    ExpectedExpression,
-    ExpectedTopLevelItem,
-    UnclosedComment,
-    ExpectedLParen,
-    ExpectedRParen,
-    ExpectedPipe,
-    ExpectedIdentifier,
-    ExpectedString,
-    ExpectedComma,
-    UnknownZemplConstruct,
-    OutOfMemory,
-};
 
 /// Parser for zempl files - coordinates lexer, HTML parsing, and expression parsing
 pub const Parser = struct {
     lexer: *Lexer,
     allocator: std.mem.Allocator,
     file_path: []const u8,
+    error_details: ?ErrorDetails,
 
     /// HTML void elements (self-closing, no content allowed)
     const void_elements = [_][]const u8{
@@ -57,11 +33,21 @@ pub const Parser = struct {
             .lexer = lexer,
             .allocator = allocator,
             .file_path = file_path,
+            .error_details = null,
+        };
+    }
+
+    fn setError(self: *Parser, location: Location, message: []const u8) void {
+        const line_end = if (std.mem.indexOfScalar(u8, self.lexer.source[location.row_start..], '\n')) |line_len| location.row_start + line_len else self.lexer.source.len;
+        self.error_details = .{
+            .location = location,
+            .message = message,
+            .line = self.lexer.source[location.row_start..line_end],
         };
     }
 
     /// Parse a complete zempl file
-    pub fn parseFile(self: *Parser) Error!ZemplFile {
+    pub fn parseFile(self: *Parser) error{ ParseError, OutOfMemory }!ZemplFile {
         var items = std.ArrayList(ZemplItem).empty;
         errdefer {
             for (items.items) |item| {
@@ -87,15 +73,10 @@ pub const Parser = struct {
 
         return ZemplFile{
             .items = try items.toOwnedSlice(self.allocator),
-            .location = .{
-                .file_path = self.file_path,
-                .row = 1,
-                .column = 1,
-            },
         };
     }
 
-    fn tryParseZimport(self: *Parser) Error!?ZemplImport {
+    fn tryParseZimport(self: *Parser) error{ ParseError, OutOfMemory }!?ZemplImport {
         var lexer = self.lexer.*;
 
         var is_public = false;
@@ -157,19 +138,15 @@ pub const Parser = struct {
         return ZemplImport{
             .const_name = const_name,
             .path = path,
-            .location = first_token.location,
             .is_public = is_public,
         };
     }
 
-    fn parseTopLevelItem(self: *Parser) Error!?[]const u8 {
+    fn parseTopLevelItem(self: *Parser) error{ ParseError, OutOfMemory }!?[]const u8 {
         const start_pos = self.lexer.getPosition();
         const source_slice = self.lexer.source[start_pos..];
 
-        const parse_result = zig_parse.parseTopLevelItem(self.allocator, source_slice) catch |err| switch (err) {
-            error.ParseError => return error.ExpectedTopLevelItem,
-            else => |e| return e,
-        };
+        const parse_result = try zig_parse.parseTopLevelItem(self.allocator, source_slice, &self.error_details);
 
         if (parse_result) |result| {
             self.lexer.advanceBy(result.consumed);
@@ -178,27 +155,21 @@ pub const Parser = struct {
         return null;
     }
 
-    fn parseExpression(self: *Parser) Error![]const u8 {
+    fn parseExpression(self: *Parser) error{ ParseError, OutOfMemory }![]const u8 {
         const start_pos = self.lexer.getPosition();
         const source_slice = self.lexer.source[start_pos..];
 
-        const parse_result = zig_parse.parseExpression(self.allocator, source_slice) catch |err| switch (err) {
-            error.ParseError => return error.ExpectedExpression,
-            else => |e| return e,
-        };
+        const parse_result = try zig_parse.parseExpression(self.allocator, source_slice, &self.error_details);
 
         self.lexer.advanceBy(parse_result.consumed);
         return parse_result.source_text;
     }
 
-    fn parseParamDeclList(self: *Parser) Error![]const u8 {
+    fn parseParamDeclList(self: *Parser) error{ ParseError, OutOfMemory }![]const u8 {
         const start_pos = self.lexer.getPosition();
         const source_slice = self.lexer.source[start_pos..];
 
-        const parse_result = zig_parse.parseParamDeclList(self.allocator, source_slice) catch |err| switch (err) {
-            error.ParseError => return error.ExpectedParamList,
-            else => |e| return e,
-        };
+        const parse_result = try zig_parse.parseParamDeclList(self.allocator, source_slice, &self.error_details);
 
         self.lexer.advanceBy(parse_result.consumed);
         return parse_result.source_text;
@@ -206,28 +177,28 @@ pub const Parser = struct {
 
     /// Parse a zempl component definition
     /// Handles both "zempl Name() {}" and "pub zempl Name() {}"
-    fn parseZemplComponent(self: *Parser) Error!ZemplComponent {
-        // Check for optional 'pub' keyword
+    fn parseZemplComponent(self: *Parser) error{ ParseError, OutOfMemory }!ZemplComponent {
         var is_public = false;
         const first_token = self.lexer.peek();
         if (first_token.token_type == .identifier and std.mem.eql(u8, first_token.text, "pub")) {
-            _ = self.lexer.next(); // consume 'pub'
+            _ = self.lexer.next();
             is_public = true;
         }
 
-        // Expect zempl keyword
         const zempl_token = self.lexer.next();
         if (zempl_token.token_type != .identifier) {
-            return error.ExpectedZemplKeyword;
+            self.setError(zempl_token.location, "expected 'zempl' keyword");
+            return error.ParseError;
         }
         if (!std.mem.eql(u8, zempl_token.text, "zempl")) {
-            return error.ExpectedZemplKeyword;
+            self.setError(zempl_token.location, "expected 'zempl' keyword");
+            return error.ParseError;
         }
 
-        // Expect component name (identifier)
         const name_token = self.lexer.next();
         if (name_token.token_type != .identifier) {
-            return error.ExpectedComponentName;
+            self.setError(name_token.location, "expected component name");
+            return error.ParseError;
         }
         const name = try self.allocator.dupe(u8, name_token.text);
         errdefer self.allocator.free(name);
@@ -237,10 +208,10 @@ pub const Parser = struct {
 
         const lbrace_token = self.lexer.next();
         if (lbrace_token.token_type != .lbrace) {
-            return error.ExpectedLBrace;
+            self.setError(lbrace_token.location, "expected '{'");
+            return error.ParseError;
         }
 
-        // Parse body (HTML content)
         const body = try self.parseHtmlBody("");
 
         return ZemplComponent{
@@ -248,13 +219,12 @@ pub const Parser = struct {
             .is_public = is_public,
             .params = params,
             .body = body,
-            .location = name_token.location,
         };
     }
 
     /// Parse HTML body content
     /// current_tag_name is an empty string if we are not inside a tag but a block enclosed by braces
-    fn parseHtmlBody(self: *Parser, current_tag_name: []const u8) Error![]HtmlNode {
+    fn parseHtmlBody(self: *Parser, current_tag_name: []const u8) error{ ParseError, OutOfMemory }![]HtmlNode {
         var nodes = std.ArrayList(HtmlNode).empty;
         errdefer {
             for (nodes.items) |*node| {
@@ -263,14 +233,15 @@ pub const Parser = struct {
             nodes.deinit(self.allocator);
         }
 
-        // Parse content until closing brace
         while (true) {
             const token = self.lexer.peek();
             token: switch (token.token_type) {
                 .rbrace => {
-                    _ = self.lexer.next(); // consume the brace
-                    if (current_tag_name.len > 0)
-                        return error.UnexpectedRBrace;
+                    _ = self.lexer.next();
+                    if (current_tag_name.len > 0) {
+                        self.setError(token.location, "unexpected '}'");
+                        return error.ParseError;
+                    }
                     break;
                 },
                 .langle => {
@@ -307,62 +278,63 @@ pub const Parser = struct {
 
     /// Parse an HTML element, comment, or DOCTYPE
     /// Returns null if this closes the current element
-    fn parseHtmlElementOrComment(self: *Parser, current_tag_name: []const u8) Error!?HtmlNode {
-        const location = self.lexer.next().location; // consume '<'
+    fn parseHtmlElementOrComment(self: *Parser, current_tag_name: []const u8) error{ ParseError, OutOfMemory }!?HtmlNode {
+        _ = self.lexer.next().location; // consume '<'
 
-        // Check for comment or DOCTYPE
         const next_token = self.lexer.peek();
         if (next_token.token_type == .bang) {
-            _ = self.lexer.next(); // consume '/'
-            return try self.parseDeclaration(location);
+            _ = self.lexer.next();
+            return try self.parseDeclaration();
         }
 
-        // Check for closing tag
         if (next_token.token_type == .slash) {
-            _ = self.lexer.next(); // consume '/'
+            _ = self.lexer.next();
             const name = self.lexer.next();
-            if (name.token_type != .identifier)
-                return error.ExpectedIdentifier;
-            if (!std.mem.eql(u8, name.text, current_tag_name))
-                return error.UnexpectedClosingTag;
-            if (self.lexer.next().token_type != .rangle)
-                return error.ExpectedRAngle;
+            if (name.token_type != .identifier) {
+                self.setError(name.location, "expected identifier");
+                return error.ParseError;
+            }
+            if (!std.mem.eql(u8, name.text, current_tag_name)) {
+                self.setError(name.location, "unexpected closing tag");
+                return error.ParseError;
+            }
+            if (self.lexer.next().token_type != .rangle) {
+                self.setError(self.lexer.peek().location, "expected '>'");
+                return error.ParseError;
+            }
             return null;
         }
 
-        // Parse Element
-        return try self.parseElement(location);
+        return try self.parseElement();
     }
 
     /// Parse HTML declaration (comment or doctype declaration)
-    fn parseDeclaration(self: *Parser, location: Location) Error!HtmlNode {
-        const text_token = self.lexer.nextContent(); // consume the text token
+    fn parseDeclaration(self: *Parser) error{ ParseError, OutOfMemory }!HtmlNode {
+        const text_token = self.lexer.nextContent();
 
-        // Expect >
         const rangle = self.lexer.next();
         if (rangle.token_type != .rangle) {
-            return error.UnclosedComment;
+            self.setError(rangle.location, "unclosed comment");
+            return error.ParseError;
         }
 
         return HtmlNode{
             .declaration = .{
                 .content = try self.allocator.dupe(u8, text_token.text),
-                .location = location,
             },
         };
     }
 
     /// Parse element start tag and its content
-    fn parseElement(self: *Parser, location: Location) Error!HtmlNode {
-        // Get tag name
+    fn parseElement(self: *Parser) error{ ParseError, OutOfMemory }!HtmlNode {
         const tag_token = self.lexer.next();
         if (tag_token.token_type != .identifier) {
-            return error.ExpectedTagName;
+            self.setError(tag_token.location, "expected tag name");
+            return error.ParseError;
         }
         const tag_name = try self.allocator.dupe(u8, tag_token.text);
         errdefer self.allocator.free(tag_name);
 
-        // Parse attributes
         var attributes = std.ArrayList(HtmlAttribute).empty;
         errdefer {
             for (attributes.items) |attr| {
@@ -380,25 +352,24 @@ pub const Parser = struct {
                     try attributes.append(self.allocator, attr);
                 },
                 else => {
-                    _ = self.lexer.next(); // skip unexpected token
+                    _ = self.lexer.next();
                 },
             }
         }
 
-        // Check for self-closing tag or void element
         const is_void = isVoidElement(tag_name);
         var is_self_closing = false;
 
         const next_token = self.lexer.peek();
         if (next_token.token_type == .slash) {
-            _ = self.lexer.next(); // consume '/'
+            _ = self.lexer.next();
             is_self_closing = true;
         }
 
-        // Expect >
         const rangle_token = self.lexer.next();
         if (rangle_token.token_type != .rangle) {
-            return error.ExpectedRAngle;
+            self.setError(rangle_token.location, "expected '>'");
+            return error.ParseError;
         }
 
         if (is_void or is_self_closing) {
@@ -407,7 +378,6 @@ pub const Parser = struct {
                 .attributes = try attributes.toOwnedSlice(self.allocator),
                 .children = &.{},
                 .is_void = true,
-                .location = location,
             } };
         }
 
@@ -418,34 +388,37 @@ pub const Parser = struct {
             .attributes = try attributes.toOwnedSlice(self.allocator),
             .children = children,
             .is_void = false,
-            .location = location,
         } };
     }
 
     /// Parse an HTML attribute
-    fn parseAttribute(self: *Parser) Error!HtmlAttribute {
+    fn parseAttribute(self: *Parser) error{ ParseError, OutOfMemory }!HtmlAttribute {
         const name_token = self.lexer.next();
         if (name_token.token_type != .identifier) {
-            return error.ExpectedAttributeName;
+            self.setError(name_token.location, "expected attribute name");
+            return error.ParseError;
         }
         const name = try self.allocator.dupe(u8, name_token.text);
         errdefer self.allocator.free(name);
 
         var value: []const u8 = "";
 
-        // Check for =value
         if (self.lexer.peek().token_type == .equal) {
-            _ = self.lexer.next(); // consume '='
+            _ = self.lexer.next();
 
             const next_token = self.lexer.peek();
             if (next_token.token_type == .lbrace) {
                 _ = self.lexer.next();
                 value = try self.parseExpression();
-                if (self.lexer.next().token_type != .rbrace)
-                    return error.ExpectedRBrace;
+                if (self.lexer.next().token_type != .rbrace) {
+                    self.setError(self.lexer.peek().location, "expected '}'");
+                    return error.ParseError;
+                }
             } else {
-                if (next_token.token_type != .string)
-                    return error.ExpectedString;
+                if (next_token.token_type != .string) {
+                    self.setError(next_token.location, "expected string");
+                    return error.ParseError;
+                }
                 value = try self.allocator.dupe(u8, next_token.text);
             }
         } else {
@@ -455,45 +428,45 @@ pub const Parser = struct {
         return HtmlAttribute{
             .name = name,
             .value = value,
-            .location = name_token.location,
         };
     }
 
     /// Parse text content using nextContent
-    fn parseTextContent(self: *Parser) Error!HtmlNode {
+    fn parseTextContent(self: *Parser) error{ ParseError, OutOfMemory }!HtmlNode {
         const token = self.lexer.nextContent();
 
         if (token.token_type == .eof) {
-            return error.UnexpectedEof;
+            self.setError(token.location, "unexpected end of file");
+            return error.ParseError;
         }
 
         std.debug.assert(token.token_type == .text);
 
         return HtmlNode{ .text = .{
             .content = try self.allocator.dupe(u8, token.text),
-            .location = token.location,
         } };
     }
 
     /// Parse expression interpolation {expr}
-    fn parseExpressionInterpolation(self: *Parser) Error!HtmlNode {
-        const lbrace_token = self.lexer.next(); // consume '{'
+    fn parseExpressionInterpolation(self: *Parser) error{ ParseError, OutOfMemory }!HtmlNode {
+        const lbrace_token = self.lexer.next();
 
         const expr = try self.parseExpression();
         errdefer self.allocator.free(expr);
 
-        if (self.lexer.next().token_type != .rbrace)
-            return error.ExpectedRBrace;
+        if (self.lexer.next().token_type != .rbrace) {
+            self.setError(lbrace_token.location, "expected '}'");
+            return error.ParseError;
+        }
 
         return HtmlNode{ .expression = .{
             .expr = expr,
-            .location = lbrace_token.location,
         } };
     }
 
     /// Parse zempl constructs (@if, @for, @while, @Component)
-    fn parseZemplConstruct(self: *Parser) Error!HtmlNode {
-        const at_token = self.lexer.next(); // consume '@identifier'
+    fn parseZemplConstruct(self: *Parser) error{ ParseError, OutOfMemory }!HtmlNode {
+        const at_token = self.lexer.next();
         const construct_name = at_token.text;
 
         if (std.mem.eql(u8, construct_name, "@if")) {
@@ -503,31 +476,36 @@ pub const Parser = struct {
         } else if (std.mem.eql(u8, construct_name, "@while")) {
             return self.parseWhileLoop();
         } else if (construct_name.len > 1 and std.ascii.isUpper(construct_name[1])) {
-            // Component call: @ComponentName
             return self.parseComponentCall(construct_name);
         } else {
-            return error.UnknownZemplConstruct;
+            self.setError(at_token.location, "unknown zempl construct");
+            return error.ParseError;
         }
     }
 
     /// Parse @if statement
-    fn parseIfStatement(self: *Parser) Error!HtmlNode {
-        if (self.lexer.next().token_type != .lparen) {
-            return error.ExpectedLParen;
+    fn parseIfStatement(self: *Parser) error{ ParseError, OutOfMemory }!HtmlNode {
+        const lparen_token = self.lexer.next();
+        if (lparen_token.token_type != .lparen) {
+            self.setError(lparen_token.location, "expected '('");
+            return error.ParseError;
         }
 
         const condition = try self.parseExpression();
         errdefer self.allocator.free(condition);
 
-        if (self.lexer.next().token_type != .rparen) {
-            return error.ExpectedRParen;
+        const rparen_token = self.lexer.next();
+        if (rparen_token.token_type != .rparen) {
+            self.setError(rparen_token.location, "expected ')'");
+            return error.ParseError;
         }
 
-        if (self.lexer.next().token_type != .lbrace) {
-            return error.ExpectedLBrace;
+        const lbrace_token = self.lexer.next();
+        if (lbrace_token.token_type != .lbrace) {
+            self.setError(lbrace_token.location, "expected '{'");
+            return error.ParseError;
         }
 
-        // Expect { then_body }
         const then_body = try self.parseHtmlBody("");
         errdefer {
             for (then_body) |*node| {
@@ -536,14 +514,15 @@ pub const Parser = struct {
             self.allocator.free(then_body);
         }
 
-        // Check for @else
         var else_body: ?[]HtmlNode = null;
         const next_token = self.lexer.peek();
         if (next_token.token_type == .identifier and std.mem.eql(u8, next_token.text, "@else")) {
-            _ = self.lexer.next(); // consume @else
+            _ = self.lexer.next();
 
-            if (self.lexer.next().token_type != .lbrace) {
-                return error.ExpectedLBrace;
+            const else_lbrace = self.lexer.next();
+            if (else_lbrace.token_type != .lbrace) {
+                self.setError(else_lbrace.location, "expected '{'");
+                return error.ParseError;
             }
 
             else_body = try self.parseHtmlBody("");
@@ -553,18 +532,15 @@ pub const Parser = struct {
             .condition = condition,
             .then_body = then_body,
             .else_body = else_body,
-            .location = .{
-                .file_path = self.file_path,
-                .row = 1,
-                .column = 1,
-            },
         } } };
     }
 
     /// Parse @for loop
-    fn parseForLoop(self: *Parser) Error!HtmlNode {
-        if (self.lexer.next().token_type != .lparen) {
-            return error.ExpectedLParen;
+    fn parseForLoop(self: *Parser) error{ ParseError, OutOfMemory }!HtmlNode {
+        const lparen_token = self.lexer.next();
+        if (lparen_token.token_type != .lparen) {
+            self.setError(lparen_token.location, "expected '('");
+            return error.ParseError;
         }
 
         var iterables = std.ArrayList([]const u8).empty;
@@ -582,12 +558,16 @@ pub const Parser = struct {
             if (self.lexer.peek().token_type != .comma) break;
         }
 
-        if (self.lexer.next().token_type != .rparen) {
-            return error.ExpectedRParen;
+        const rparen_token = self.lexer.next();
+        if (rparen_token.token_type != .rparen) {
+            self.setError(rparen_token.location, "expected ')'");
+            return error.ParseError;
         }
 
-        if (self.lexer.next().token_type != .pipe) {
-            return error.ExpectedPipe;
+        const first_pipe = self.lexer.next();
+        if (first_pipe.token_type != .pipe) {
+            self.setError(first_pipe.location, "expected '|'");
+            return error.ParseError;
         }
 
         var captures = std.ArrayList([]const u8).empty;
@@ -601,18 +581,23 @@ pub const Parser = struct {
         while (true) {
             const capture = self.lexer.next();
             if (capture.token_type != .identifier) {
-                return error.ExpectedIdentifier;
+                self.setError(capture.location, "expected identifier");
+                return error.ParseError;
             }
             try captures.append(self.allocator, try self.allocator.dupe(u8, capture.text));
             if (self.lexer.peek().token_type != .comma) break;
         }
 
-        if (self.lexer.next().token_type != .pipe) {
-            return error.ExpectedPipe;
+        const second_pipe = self.lexer.next();
+        if (second_pipe.token_type != .pipe) {
+            self.setError(second_pipe.location, "expected '|'");
+            return error.ParseError;
         }
 
-        if (self.lexer.next().token_type != .lbrace) {
-            return error.ExpectedLBrace;
+        const lbrace_token = self.lexer.next();
+        if (lbrace_token.token_type != .lbrace) {
+            self.setError(lbrace_token.location, "expected '{'");
+            return error.ParseError;
         }
 
         const body = try self.parseHtmlBody("");
@@ -621,19 +606,15 @@ pub const Parser = struct {
             .captures = try captures.toOwnedSlice(self.allocator),
             .iterables = try iterables.toOwnedSlice(self.allocator),
             .body = body,
-            .location = .{
-                .file_path = self.file_path,
-                .row = 1,
-                .column = 1,
-            },
         } } };
     }
 
     /// Parse @while loop
-    fn parseWhileLoop(self: *Parser) Error!HtmlNode {
+    fn parseWhileLoop(self: *Parser) error{ ParseError, OutOfMemory }!HtmlNode {
         const lparen_token = self.lexer.next();
         if (lparen_token.token_type != .lparen) {
-            return error.ExpectedLParen;
+            self.setError(lparen_token.location, "expected '('");
+            return error.ParseError;
         }
 
         const condition = try self.parseExpression();
@@ -641,11 +622,14 @@ pub const Parser = struct {
 
         const rparen_token = self.lexer.next();
         if (rparen_token.token_type != .rparen) {
-            return error.ExpectedRParen;
+            self.setError(rparen_token.location, "expected ')'");
+            return error.ParseError;
         }
 
-        if (self.lexer.next().token_type != .lbrace) {
-            return error.ExpectedLBrace;
+        const lbrace_token = self.lexer.next();
+        if (lbrace_token.token_type != .lbrace) {
+            self.setError(lbrace_token.location, "expected '{'");
+            return error.ParseError;
         }
 
         const body = try self.parseHtmlBody("");
@@ -653,28 +637,25 @@ pub const Parser = struct {
         return HtmlNode{ .control_flow = .{ .while_loop = .{
             .condition = condition,
             .body = body,
-            .location = .{
-                .file_path = self.file_path,
-                .row = 1,
-                .column = 1,
-            },
         } } };
     }
 
     /// Parse @{...} code block
-    fn parseCodeBlock(self: *Parser) Error!HtmlNode {
-        const at_lbrace_token = self.lexer.next(); // consume '@{'
+    fn parseCodeBlock(self: *Parser) error{ ParseError, OutOfMemory }!HtmlNode {
+        const at_lbrace_token = self.lexer.next();
 
         const start_pos = self.lexer.getPosition();
 
-        // Find matching }
         var brace_depth: i32 = 1;
         while (brace_depth > 0) {
             const token = self.lexer.next();
             switch (token.token_type) {
                 .lbrace => brace_depth += 1,
                 .rbrace => brace_depth -= 1,
-                .eof => return error.UnexpectedEof,
+                .eof => {
+                    self.setError(at_lbrace_token.location, "unclosed code block");
+                    return error.ParseError;
+                },
                 else => {},
             }
         }
@@ -684,13 +665,12 @@ pub const Parser = struct {
 
         return HtmlNode{ .code_block = .{
             .statements = try self.allocator.dupe(u8, statements),
-            .location = at_lbrace_token.location,
         } };
     }
 
     /// Parse @Component(...) call
-    fn parseComponentCall(self: *Parser, component_name: []const u8) Error!HtmlNode {
-        const name = try self.allocator.dupe(u8, component_name[1..]); // remove @ prefix
+    fn parseComponentCall(self: *Parser, component_name: []const u8) error{ ParseError, OutOfMemory }!HtmlNode {
+        const name = try self.allocator.dupe(u8, component_name[1..]);
         errdefer self.allocator.free(name);
 
         var args = std.ArrayList(ZemplArg).empty;
@@ -703,15 +683,16 @@ pub const Parser = struct {
 
         const lparen_token = self.lexer.next();
         if (lparen_token.token_type != .lparen) {
-            return error.ExpectedLParen;
+            self.setError(lparen_token.location, "expected '('");
+            return error.ParseError;
         }
 
-        // Parse argument expressions separated by commas
         while (true) {
             const token = self.lexer.peek();
 
             if (token.token_type == .eof) {
-                return error.UnexpectedEof;
+                self.setError(token.location, "unexpected end of file");
+                return error.ParseError;
             }
 
             if (token.token_type == .rparen) {
@@ -723,7 +704,6 @@ pub const Parser = struct {
 
             try args.append(self.allocator, .{
                 .expr = arg,
-                .location = token.location,
             });
 
             const end_token = self.lexer.next();
@@ -731,18 +711,14 @@ pub const Parser = struct {
                 break;
             }
             if (end_token.token_type != .comma) {
-                return error.ExpectedComma;
+                self.setError(end_token.location, "expected ',' or ')'");
+                return error.ParseError;
             }
         }
 
         return HtmlNode{ .component_call = .{
             .component_name = name,
             .args = try args.toOwnedSlice(self.allocator),
-            .location = .{
-                .file_path = self.file_path,
-                .row = 1,
-                .column = 1,
-            },
         } };
     }
 
@@ -1227,7 +1203,7 @@ test "parseZemplComponent fails without zempl keyword" {
     var parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
 
     const result = parser.parseFile();
-    try std.testing.expectError(error.ExpectedZemplKeyword, result);
+    try std.testing.expectError(error.ParseError, result);
 }
 
 test "parseZemplComponent fails without component name" {
@@ -1236,7 +1212,7 @@ test "parseZemplComponent fails without component name" {
     var parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
 
     const result = parser.parseFile();
-    try std.testing.expectError(error.ExpectedComponentName, result);
+    try std.testing.expectError(error.ParseError, result);
 }
 
 test "parseZemplComponent fails without param list" {
@@ -1245,7 +1221,7 @@ test "parseZemplComponent fails without param list" {
     var parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
 
     const result = parser.parseFile();
-    try std.testing.expectError(error.ExpectedParamList, result);
+    try std.testing.expectError(error.ParseError, result);
 }
 
 test "parseHtmlBody fails without opening brace" {
@@ -1254,7 +1230,7 @@ test "parseHtmlBody fails without opening brace" {
     var parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
 
     const result = parser.parseFile();
-    try std.testing.expectError(error.ExpectedLBrace, result);
+    try std.testing.expectError(error.ParseError, result);
 }
 
 test "parseHtmlBody fails with unclosed tag" {
@@ -1264,5 +1240,5 @@ test "parseHtmlBody fails with unclosed tag" {
 
     const result = parser.parseFile();
     // The parser encounters '}' when expecting </div>, so it returns UnexpectedRBrace
-    try std.testing.expectError(error.UnexpectedRBrace, result);
+    try std.testing.expectError(error.ParseError, result);
 }

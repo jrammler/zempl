@@ -2,6 +2,8 @@ const std = @import("std");
 const Parse = @import("zig/Parse.zig");
 const Ast = std.zig.Ast;
 const Tokenizer = std.zig.Tokenizer;
+const ErrorDetails = @import("error.zig").ErrorDetails;
+const Location = @import("lexer.zig").Location;
 
 pub const Error = error{
     ParseError,
@@ -18,11 +20,34 @@ pub const ParseResult = struct {
     }
 };
 
+fn byteOffsetToLocation(source: []const u8, byte_offset: usize) Location {
+    var row: usize = 1;
+    var row_start: usize = 0;
+    var index: usize = 0;
+
+    for (source, 0..) |ch, i| {
+        if (i >= byte_offset) {
+            index = i;
+            break;
+        }
+        if (ch == '\n') {
+            row += 1;
+            row_start = i + 1;
+        }
+    }
+
+    return Location{
+        .file_path = "",
+        .row = row,
+        .row_start = row_start,
+        .index = index,
+    };
+}
+
 /// Parse a Zig expression and return its source text + consumed length.
 /// Validates syntax then extracts the original source text.
 /// Caller must free result.source_text.
-pub fn parseExpression(allocator: std.mem.Allocator, source: [:0]const u8) Error!ParseResult {
-    // Tokenize
+pub fn parseExpression(allocator: std.mem.Allocator, source: [:0]const u8, error_details: *?ErrorDetails) Error!ParseResult {
     var tokens = Ast.TokenList{};
     defer tokens.deinit(allocator);
 
@@ -38,7 +63,6 @@ pub fn parseExpression(allocator: std.mem.Allocator, source: [:0]const u8) Error
 
     const tokens_slice = tokens.slice();
 
-    // Parse
     var parse = Parse{
         .gpa = allocator,
         .source = source,
@@ -55,22 +79,21 @@ pub fn parseExpression(allocator: std.mem.Allocator, source: [:0]const u8) Error
     defer parse.scratch.deinit(allocator);
     defer parse.errors.deinit(allocator);
 
-    _ = try parse.parseExpr() orelse return error.ParseError;
+    _ = try parse.parseExpr() orelse {
+        populateErrorDetails(&parse, source, error_details);
+        return error.ParseError;
+    };
 
-    // Get how many tokens were consumed
     const final_tok_i = parse.tok_i;
 
-    // Start is always 0 since we parse from beginning of source
     const start: u32 = 0;
 
-    // Get the source range - end is where parsing stopped (final_tok_i)
     const end: u32 = if (final_tok_i < tokens_slice.len)
         parse.tokenStart(final_tok_i)
     else
         @as(u32, @intCast(source.len));
 
     const source_text = source[start..end];
-    // Trim trailing whitespace from the expression
     const trimmed = std.mem.trim(u8, source_text, &std.ascii.whitespace);
     const result_str = try allocator.dupe(u8, trimmed);
 
@@ -83,7 +106,7 @@ pub fn parseExpression(allocator: std.mem.Allocator, source: [:0]const u8) Error
 /// Parse a parameter declaration list (e.g., `(a: i32, b: u32)`) and return source text + consumed length.
 /// This is used to parse zempl component parameter lists.
 /// Returns an error if the source doesn't start with '(' or if the param list is malformed.
-pub fn parseParamDeclList(allocator: std.mem.Allocator, source: [:0]const u8) Error!ParseResult {
+pub fn parseParamDeclList(allocator: std.mem.Allocator, source: [:0]const u8, error_details: *?ErrorDetails) Error!ParseResult {
     var tokens = Ast.TokenList{};
     defer tokens.deinit(allocator);
 
@@ -116,7 +139,13 @@ pub fn parseParamDeclList(allocator: std.mem.Allocator, source: [:0]const u8) Er
         parse.errors.deinit(allocator);
     }
 
-    _ = try parse.parseParamDeclList();
+    const result = parse.parseParamDeclList() catch |err| switch (err) {
+        error.ParseError, error.OutOfMemory => {
+            populateErrorDetails(&parse, source, error_details);
+            return error.ParseError;
+        },
+    };
+    _ = result;
 
     const final_tok_i = parse.tok_i;
     const start: u32 = 0;
@@ -135,8 +164,22 @@ pub fn parseParamDeclList(allocator: std.mem.Allocator, source: [:0]const u8) Er
     };
 }
 
+fn populateErrorDetails(parse: *Parse, source: []const u8, error_details: *?ErrorDetails) void {
+    if (parse.errors.items.len > 0) {
+        const ast_err = parse.errors.items[0];
+        const byte_offset = parse.tokenStart(ast_err.token);
+        const loc = byteOffsetToLocation(source, byte_offset);
+        const line_end = std.mem.indexOfScalar(u8, source[loc.row_start..], '\n') orelse source.len;
+        error_details.* = .{
+            .location = loc,
+            .message = "zig parse error",
+            .line = source[loc.row_start..line_end],
+        };
+    }
+}
+
 /// Parse a top-level declaration (const, var, fn) and return source text + consumed length.
-pub fn parseTopLevelItem(allocator: std.mem.Allocator, source: [:0]const u8) Error!?ParseResult {
+pub fn parseTopLevelItem(allocator: std.mem.Allocator, source: [:0]const u8, error_details: *?ErrorDetails) Error!?ParseResult {
     var tokens = Ast.TokenList{};
     defer tokens.deinit(allocator);
 
@@ -172,17 +215,28 @@ pub fn parseTopLevelItem(allocator: std.mem.Allocator, source: [:0]const u8) Err
     const tag = parse.tokenTag(parse.tok_i);
 
     switch (tag) {
-        .keyword_const, .keyword_var => _ = (try parse.parseGlobalVarDecl()) orelse return null,
-        .keyword_fn => _ = (try parse.parseFnProto()) orelse return null,
+        .keyword_const, .keyword_var => _ = (try parse.parseGlobalVarDecl()) orelse {
+            populateErrorDetails(&parse, source, error_details);
+            return error.ParseError;
+        },
+        .keyword_fn => _ = (try parse.parseFnProto()) orelse {
+            populateErrorDetails(&parse, source, error_details);
+            return error.ParseError;
+        },
         .keyword_pub => {
-            // Look ahead to see what's after 'pub'
             const next_tag = parse.tokenTag(parse.tok_i + 1);
             if (next_tag == .keyword_const or next_tag == .keyword_var) {
-                _ = parse.nextToken(); // consume 'pub'
-                _ = (try parse.parseGlobalVarDecl()) orelse return null;
+                _ = parse.nextToken();
+                _ = (try parse.parseGlobalVarDecl()) orelse {
+                    populateErrorDetails(&parse, source, error_details);
+                    return error.ParseError;
+                };
             } else if (next_tag == .keyword_fn) {
-                _ = parse.nextToken(); // consume 'pub'
-                _ = (try parse.parseFnProto()) orelse return null;
+                _ = parse.nextToken();
+                _ = (try parse.parseFnProto()) orelse {
+                    populateErrorDetails(&parse, source, error_details);
+                    return error.ParseError;
+                };
             } else {
                 return null;
             }
@@ -214,7 +268,8 @@ pub fn parseTopLevelItem(allocator: std.mem.Allocator, source: [:0]const u8) Err
 
 test "parseExpression returns source text for integer literal" {
     const source = "42";
-    const result = try parseExpression(std.testing.allocator, source);
+    var error_details: ?ErrorDetails = undefined;
+    const result = try parseExpression(std.testing.allocator, source, &error_details);
     defer std.testing.allocator.free(result.source_text);
     try std.testing.expectEqualStrings("42", result.source_text);
     try std.testing.expectEqual(@as(usize, 2), result.consumed);
@@ -222,14 +277,16 @@ test "parseExpression returns source text for integer literal" {
 
 test "parseExpression returns source text for string literal" {
     const source = "\"hello world\"";
-    const result = try parseExpression(std.testing.allocator, source);
+    var error_details: ?ErrorDetails = undefined;
+    const result = try parseExpression(std.testing.allocator, source, &error_details);
     defer std.testing.allocator.free(result.source_text);
     try std.testing.expectEqualStrings("\"hello world\"", result.source_text);
 }
 
 test "parseExpression returns source text for variable access" {
     const source = "my_var";
-    const result = try parseExpression(std.testing.allocator, source);
+    var error_details: ?ErrorDetails = undefined;
+    const result = try parseExpression(std.testing.allocator, source, &error_details);
     defer std.testing.allocator.free(result.source_text);
     try std.testing.expectEqualStrings("my_var", result.source_text);
     try std.testing.expectEqual(@as(usize, 6), result.consumed);
@@ -239,7 +296,8 @@ test "parseExpression returns source text for binary expression" {
     // TODO: Implement proper AST traversal to extract full expression source
     // Current implementation only extracts main token, not full expression
     const source = "a + b";
-    const result = try parseExpression(std.testing.allocator, source);
+    var error_details: ?ErrorDetails = undefined;
+    const result = try parseExpression(std.testing.allocator, source, &error_details);
     defer std.testing.allocator.free(result.source_text);
     // For now, we verify parsing succeeds; full source extraction needs work
     try std.testing.expect(result.source_text.len > 0);
@@ -248,14 +306,16 @@ test "parseExpression returns source text for binary expression" {
 test "parseExpression returns source text for function call" {
     // TODO: Implement proper AST traversal to extract full expression source
     const source = "foo(a, b)";
-    const result = try parseExpression(std.testing.allocator, source);
+    var error_details: ?ErrorDetails = undefined;
+    const result = try parseExpression(std.testing.allocator, source, &error_details);
     defer std.testing.allocator.free(result.source_text);
     try std.testing.expect(result.source_text.len > 0);
 }
 
 test "parseParamDeclList returns source text for empty params" {
     const source = "()";
-    const result = try parseParamDeclList(std.testing.allocator, source);
+    var error_details: ?ErrorDetails = undefined;
+    const result = try parseParamDeclList(std.testing.allocator, source, &error_details);
     defer std.testing.allocator.free(result.source_text);
     try std.testing.expectEqualStrings("()", result.source_text);
     try std.testing.expectEqual(@as(usize, 2), result.consumed);
@@ -263,34 +323,39 @@ test "parseParamDeclList returns source text for empty params" {
 
 test "parseParamDeclList returns source text for single param" {
     const source = "(x: i32)";
-    const result = try parseParamDeclList(std.testing.allocator, source);
+    var error_details: ?ErrorDetails = undefined;
+    const result = try parseParamDeclList(std.testing.allocator, source, &error_details);
     defer std.testing.allocator.free(result.source_text);
     try std.testing.expectEqualStrings("(x: i32)", result.source_text);
 }
 
 test "parseParamDeclList returns source text for multiple params" {
     const source = "(a: i32, b: []const u8)";
-    const result = try parseParamDeclList(std.testing.allocator, source);
+    var error_details: ?ErrorDetails = undefined;
+    const result = try parseParamDeclList(std.testing.allocator, source, &error_details);
     defer std.testing.allocator.free(result.source_text);
     try std.testing.expectEqualStrings("(a: i32, b: []const u8)", result.source_text);
 }
 
 test "parseParamDeclList returns error if not starting with l_paren" {
     const source = "i32";
-    const result = parseParamDeclList(std.testing.allocator, source);
+    var error_details: ?ErrorDetails = undefined;
+    const result = parseParamDeclList(std.testing.allocator, source, &error_details);
     try std.testing.expectError(error.ParseError, result);
 }
 
 test "parseParamDeclList returns error for invalid param list" {
     const source = "(invalid";
-    const result = parseParamDeclList(std.testing.allocator, source);
+    var error_details: ?ErrorDetails = undefined;
+    const result = parseParamDeclList(std.testing.allocator, source, &error_details);
     // Should return an error since it starts with ( but is malformed
     try std.testing.expectError(error.ParseError, result);
 }
 
 test "parseTopLevelItem returns source text for const declaration" {
     const source = "const x = 42;";
-    const result = try parseTopLevelItem(std.testing.allocator, source);
+    var error_details: ?ErrorDetails = undefined;
+    const result = try parseTopLevelItem(std.testing.allocator, source, &error_details);
     try std.testing.expect(result != null);
     if (result) |r| {
         defer std.testing.allocator.free(r.source_text);
@@ -300,7 +365,8 @@ test "parseTopLevelItem returns source text for const declaration" {
 
 test "parseTopLevelItem returns source text for var declaration" {
     const source = "var y: i32 = 0;";
-    const result = try parseTopLevelItem(std.testing.allocator, source);
+    var error_details: ?ErrorDetails = undefined;
+    const result = try parseTopLevelItem(std.testing.allocator, source, &error_details);
     try std.testing.expect(result != null);
     if (result) |r| {
         defer std.testing.allocator.free(r.source_text);
@@ -310,7 +376,8 @@ test "parseTopLevelItem returns source text for var declaration" {
 
 test "parseTopLevelItem returns source text for function prototype" {
     const source = "fn foo() void;";
-    const result = try parseTopLevelItem(std.testing.allocator, source);
+    var error_details: ?ErrorDetails = undefined;
+    const result = try parseTopLevelItem(std.testing.allocator, source, &error_details);
     try std.testing.expect(result != null);
     if (result) |r| {
         defer std.testing.allocator.free(r.source_text);
@@ -320,13 +387,15 @@ test "parseTopLevelItem returns source text for function prototype" {
 
 test "parseTopLevelItem returns null for non-declaration" {
     const source = "not_a_declaration";
-    const result = try parseTopLevelItem(std.testing.allocator, source);
+    var error_details: ?ErrorDetails = undefined;
+    const result = try parseTopLevelItem(std.testing.allocator, source, &error_details);
     try std.testing.expect(result == null);
 }
 
 test "parseTopLevelItem returns null for empty source" {
     const source = "";
-    const result = try parseTopLevelItem(std.testing.allocator, source);
+    var error_details: ?ErrorDetails = undefined;
+    const result = try parseTopLevelItem(std.testing.allocator, source, &error_details);
     try std.testing.expect(result == null);
 }
 
@@ -338,7 +407,8 @@ test "parseExpression handles content after expression" {
     // This is how the zempl lexer will use it - parse expr, then continue
     // After parsing "42", lexer should continue at "}"
     const source = "42}";
-    const result = try parseExpression(std.testing.allocator, source);
+    var error_details: ?ErrorDetails = undefined;
+    const result = try parseExpression(std.testing.allocator, source, &error_details);
     defer std.testing.allocator.free(result.source_text);
     try std.testing.expectEqualStrings("42", result.source_text);
     try std.testing.expectEqual(@as(usize, 2), result.consumed);
@@ -349,7 +419,8 @@ test "parseExpression stops at space after identifier" {
     // When we have "a b", we should parse "a" and stop
     // TODO: Current implementation includes the space - need better boundary detection
     const source = "a b";
-    const result = try parseExpression(std.testing.allocator, source);
+    var error_details: ?ErrorDetails = undefined;
+    const result = try parseExpression(std.testing.allocator, source, &error_details);
     defer std.testing.allocator.free(result.source_text);
     try std.testing.expect(result.source_text.len >= 1); // At least parsed "a"
 }
@@ -357,7 +428,8 @@ test "parseExpression stops at space after identifier" {
 test "parseExpression parses full binary expression" {
     // "a + b" should be fully parsed
     const source = "a + b";
-    const result = try parseExpression(std.testing.allocator, source);
+    var error_details: ?ErrorDetails = undefined;
+    const result = try parseExpression(std.testing.allocator, source, &error_details);
     defer std.testing.allocator.free(result.source_text);
     try std.testing.expect(result.source_text.len > 0);
 }
@@ -365,7 +437,8 @@ test "parseExpression parses full binary expression" {
 test "parseExpression stops at closing brace after function call" {
     // "foo()}" should parse "foo()" and stop at "}"
     const source = "foo()}";
-    const result = try parseExpression(std.testing.allocator, source);
+    var error_details: ?ErrorDetails = undefined;
+    const result = try parseExpression(std.testing.allocator, source, &error_details);
     defer std.testing.allocator.free(result.source_text);
     try std.testing.expect(result.source_text.len > 0);
 }
