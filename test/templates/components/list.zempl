@@ -1,0 +1,7 @@
+pub zempl List(items: []const []const u8) {
+    <ul>
+        @for (items) |item| {
+            <li>{item}</li>
+        }
+    </ul>
+}

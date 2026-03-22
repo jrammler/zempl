@@ -2,6 +2,7 @@ const std = @import("std");
 const ZemplFile = @import("ast.zig").ZemplFile;
 const ZemplItem = @import("ast.zig").ZemplItem;
 const ZemplComponent = @import("ast.zig").ZemplComponent;
+const ZemplImport = @import("ast.zig").ZemplImport;
 const HtmlNode = @import("ast.zig").HtmlNode;
 const HtmlElement = @import("ast.zig").HtmlElement;
 const HtmlAttribute = @import("ast.zig").HtmlAttribute;
@@ -9,11 +10,11 @@ const ZemplArg = @import("ast.zig").ZemplArg;
 const Lexer = @import("lexer.zig").Lexer;
 const Token = @import("lexer.zig").Token;
 const TokenType = @import("lexer.zig").TokenType;
-const Location = @import("error.zig").Location;
+const Location = @import("lexer.zig").Location;
 const zig_parse = @import("zig_parse.zig");
 
 /// Parser errors
-pub const ParserError = error{
+pub const Error = error{
     ExpectedZemplKeyword,
     ExpectedComponentName,
     ExpectedParamList,
@@ -60,7 +61,7 @@ pub const Parser = struct {
     }
 
     /// Parse a complete zempl file
-    pub fn parseFile(self: *Parser) ParserError!ZemplFile {
+    pub fn parseFile(self: *Parser) Error!ZemplFile {
         var items = std.ArrayList(ZemplItem).empty;
         errdefer {
             for (items.items) |item| {
@@ -69,29 +70,99 @@ pub const Parser = struct {
             items.deinit(self.allocator);
         }
 
-        // Parse top-level items until EOF
         while (self.lexer.peek().token_type != .eof) {
-            const topLevelItem = try self.parseTopLevelItem();
-            if (topLevelItem) |item| {
-                try items.append(self.allocator, .{ .declaration = item });
-            } else {
-                // Not a Zig declaration, try parsing as zempl component
-                const component = try self.parseZemplComponent();
-                try items.append(self.allocator, .{ .component = component });
+            if (try self.tryParseZimport()) |import_item| {
+                try items.append(self.allocator, .{ .import = import_item });
+                continue;
             }
+
+            if (try self.parseTopLevelItem()) |item| {
+                try items.append(self.allocator, .{ .declaration = item });
+                continue;
+            }
+
+            const component = try self.parseZemplComponent();
+            try items.append(self.allocator, .{ .component = component });
         }
 
         return ZemplFile{
             .items = try items.toOwnedSlice(self.allocator),
             .location = .{
                 .file_path = self.file_path,
-                .line = 1,
+                .row = 1,
                 .column = 1,
             },
         };
     }
 
-    fn parseTopLevelItem(self: *Parser) ParserError!?[]const u8 {
+    fn tryParseZimport(self: *Parser) Error!?ZemplImport {
+        var lexer = self.lexer.*;
+
+        var is_public = false;
+        var first_token = lexer.next();
+        if (first_token.token_type == .identifier and std.mem.eql(u8, first_token.text, "pub")) {
+            is_public = true;
+            first_token = lexer.next();
+        }
+
+        if (first_token.token_type != .identifier or !std.mem.eql(u8, first_token.text, "const")) {
+            return null;
+        }
+
+        const name_token = lexer.next();
+        if (name_token.token_type != .identifier) {
+            return null;
+        }
+
+        const eq_token = lexer.next();
+        if (eq_token.token_type != .equal) {
+            return null;
+        }
+
+        const zimport_token = lexer.next();
+        if (zimport_token.token_type != .identifier or !std.mem.eql(u8, zimport_token.text, "zimport")) {
+            return null;
+        }
+
+        const lparen_token = lexer.next();
+        if (lparen_token.token_type != .lparen) {
+            return null;
+        }
+
+        const path_token = lexer.next();
+        if (path_token.token_type != .string) {
+            return null;
+        }
+
+        const rparen_token = lexer.next();
+        if (rparen_token.token_type != .rparen) {
+            return null;
+        }
+
+        const semi_token = lexer.next();
+        if (semi_token.token_type != .semicolon) {
+            return null;
+        }
+
+        const const_name = try self.allocator.dupe(u8, name_token.text);
+        errdefer self.allocator.free(const_name);
+
+        const path_text = path_token.text;
+        const path = if (path_text.len >= 2 and path_text[0] == '"' and path_text[path_text.len - 1] == '"')
+            try self.allocator.dupe(u8, path_text[1 .. path_text.len - 1])
+        else
+            try self.allocator.dupe(u8, path_text);
+
+        self.lexer.* = lexer;
+        return ZemplImport{
+            .const_name = const_name,
+            .path = path,
+            .location = first_token.location,
+            .is_public = is_public,
+        };
+    }
+
+    fn parseTopLevelItem(self: *Parser) Error!?[]const u8 {
         const start_pos = self.lexer.getPosition();
         const source_slice = self.lexer.source[start_pos..];
 
@@ -107,7 +178,7 @@ pub const Parser = struct {
         return null;
     }
 
-    fn parseExpression(self: *Parser) ParserError![]const u8 {
+    fn parseExpression(self: *Parser) Error![]const u8 {
         const start_pos = self.lexer.getPosition();
         const source_slice = self.lexer.source[start_pos..];
 
@@ -120,7 +191,7 @@ pub const Parser = struct {
         return parse_result.source_text;
     }
 
-    fn parseParamDeclList(self: *Parser) ParserError![]const u8 {
+    fn parseParamDeclList(self: *Parser) Error![]const u8 {
         const start_pos = self.lexer.getPosition();
         const source_slice = self.lexer.source[start_pos..];
 
@@ -135,7 +206,7 @@ pub const Parser = struct {
 
     /// Parse a zempl component definition
     /// Handles both "zempl Name() {}" and "pub zempl Name() {}"
-    fn parseZemplComponent(self: *Parser) ParserError!ZemplComponent {
+    fn parseZemplComponent(self: *Parser) Error!ZemplComponent {
         // Check for optional 'pub' keyword
         var is_public = false;
         const first_token = self.lexer.peek();
@@ -183,7 +254,7 @@ pub const Parser = struct {
 
     /// Parse HTML body content
     /// current_tag_name is an empty string if we are not inside a tag but a block enclosed by braces
-    fn parseHtmlBody(self: *Parser, current_tag_name: []const u8) ParserError![]HtmlNode {
+    fn parseHtmlBody(self: *Parser, current_tag_name: []const u8) Error![]HtmlNode {
         var nodes = std.ArrayList(HtmlNode).empty;
         errdefer {
             for (nodes.items) |*node| {
@@ -236,7 +307,7 @@ pub const Parser = struct {
 
     /// Parse an HTML element, comment, or DOCTYPE
     /// Returns null if this closes the current element
-    fn parseHtmlElementOrComment(self: *Parser, current_tag_name: []const u8) ParserError!?HtmlNode {
+    fn parseHtmlElementOrComment(self: *Parser, current_tag_name: []const u8) Error!?HtmlNode {
         const location = self.lexer.next().location; // consume '<'
 
         // Check for comment or DOCTYPE
@@ -264,7 +335,7 @@ pub const Parser = struct {
     }
 
     /// Parse HTML declaration (comment or doctype declaration)
-    fn parseDeclaration(self: *Parser, location: Location) ParserError!HtmlNode {
+    fn parseDeclaration(self: *Parser, location: Location) Error!HtmlNode {
         const text_token = self.lexer.nextContent(); // consume the text token
 
         // Expect >
@@ -282,7 +353,7 @@ pub const Parser = struct {
     }
 
     /// Parse element start tag and its content
-    fn parseElement(self: *Parser, location: Location) ParserError!HtmlNode {
+    fn parseElement(self: *Parser, location: Location) Error!HtmlNode {
         // Get tag name
         const tag_token = self.lexer.next();
         if (tag_token.token_type != .identifier) {
@@ -352,7 +423,7 @@ pub const Parser = struct {
     }
 
     /// Parse an HTML attribute
-    fn parseAttribute(self: *Parser) ParserError!HtmlAttribute {
+    fn parseAttribute(self: *Parser) Error!HtmlAttribute {
         const name_token = self.lexer.next();
         if (name_token.token_type != .identifier) {
             return error.ExpectedAttributeName;
@@ -389,7 +460,7 @@ pub const Parser = struct {
     }
 
     /// Parse text content using nextContent
-    fn parseTextContent(self: *Parser) ParserError!HtmlNode {
+    fn parseTextContent(self: *Parser) Error!HtmlNode {
         const token = self.lexer.nextContent();
 
         if (token.token_type == .eof) {
@@ -405,7 +476,7 @@ pub const Parser = struct {
     }
 
     /// Parse expression interpolation {expr}
-    fn parseExpressionInterpolation(self: *Parser) ParserError!HtmlNode {
+    fn parseExpressionInterpolation(self: *Parser) Error!HtmlNode {
         const lbrace_token = self.lexer.next(); // consume '{'
 
         const expr = try self.parseExpression();
@@ -421,7 +492,7 @@ pub const Parser = struct {
     }
 
     /// Parse zempl constructs (@if, @for, @while, @Component)
-    fn parseZemplConstruct(self: *Parser) ParserError!HtmlNode {
+    fn parseZemplConstruct(self: *Parser) Error!HtmlNode {
         const at_token = self.lexer.next(); // consume '@identifier'
         const construct_name = at_token.text;
 
@@ -440,7 +511,7 @@ pub const Parser = struct {
     }
 
     /// Parse @if statement
-    fn parseIfStatement(self: *Parser) ParserError!HtmlNode {
+    fn parseIfStatement(self: *Parser) Error!HtmlNode {
         if (self.lexer.next().token_type != .lparen) {
             return error.ExpectedLParen;
         }
@@ -484,14 +555,14 @@ pub const Parser = struct {
             .else_body = else_body,
             .location = .{
                 .file_path = self.file_path,
-                .line = 1,
+                .row = 1,
                 .column = 1,
             },
         } } };
     }
 
     /// Parse @for loop
-    fn parseForLoop(self: *Parser) ParserError!HtmlNode {
+    fn parseForLoop(self: *Parser) Error!HtmlNode {
         if (self.lexer.next().token_type != .lparen) {
             return error.ExpectedLParen;
         }
@@ -552,14 +623,14 @@ pub const Parser = struct {
             .body = body,
             .location = .{
                 .file_path = self.file_path,
-                .line = 1,
+                .row = 1,
                 .column = 1,
             },
         } } };
     }
 
     /// Parse @while loop
-    fn parseWhileLoop(self: *Parser) ParserError!HtmlNode {
+    fn parseWhileLoop(self: *Parser) Error!HtmlNode {
         const lparen_token = self.lexer.next();
         if (lparen_token.token_type != .lparen) {
             return error.ExpectedLParen;
@@ -584,14 +655,14 @@ pub const Parser = struct {
             .body = body,
             .location = .{
                 .file_path = self.file_path,
-                .line = 1,
+                .row = 1,
                 .column = 1,
             },
         } } };
     }
 
     /// Parse @{...} code block
-    fn parseCodeBlock(self: *Parser) ParserError!HtmlNode {
+    fn parseCodeBlock(self: *Parser) Error!HtmlNode {
         const at_lbrace_token = self.lexer.next(); // consume '@{'
 
         const start_pos = self.lexer.getPosition();
@@ -618,7 +689,7 @@ pub const Parser = struct {
     }
 
     /// Parse @Component(...) call
-    fn parseComponentCall(self: *Parser, component_name: []const u8) ParserError!HtmlNode {
+    fn parseComponentCall(self: *Parser, component_name: []const u8) Error!HtmlNode {
         const name = try self.allocator.dupe(u8, component_name[1..]); // remove @ prefix
         errdefer self.allocator.free(name);
 
@@ -669,7 +740,7 @@ pub const Parser = struct {
             .args = try args.toOwnedSlice(self.allocator),
             .location = .{
                 .file_path = self.file_path,
-                .line = 1,
+                .row = 1,
                 .column = 1,
             },
         } };

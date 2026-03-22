@@ -48,6 +48,18 @@ pub const CodeGenerator = struct {
             .component => |comp| {
                 try self.generateComponent(comp, 0);
             },
+            .import => |imp| {
+                // const NAME = @import("path.zig");
+                if (imp.is_public)
+                    try self.writer.writeAll("pub ");
+                try self.writer.writeAll("const ");
+                try self.writer.writeAll(imp.const_name);
+                try self.writer.writeAll(" = @import(\"");
+
+                try self.writer.writeAll(imp.path);
+
+                try self.writer.writeAll("\");\n");
+            },
         }
     }
 

@@ -1,0 +1,1 @@
+pub const example = zimport("example.zempl");

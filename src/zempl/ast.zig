@@ -1,5 +1,5 @@
 const std = @import("std");
-const Location = @import("error.zig").Location;
+const Location = @import("lexer.zig").Location;
 
 /// HTML element node
 pub const HtmlElement = struct {
@@ -216,15 +216,30 @@ pub const ZemplWhile = struct {
     }
 };
 
+/// Zempl import: const NAME = zimport("path.zempl");
+pub const ZemplImport = struct {
+    const_name: []const u8, // "ui" in: const ui = zimport("file.zempl");
+    path: []const u8, // "file.zempl" (raw, unresolved)
+    location: Location,
+    is_public: bool,
+
+    pub fn deinit(self: ZemplImport, allocator: std.mem.Allocator) void {
+        allocator.free(self.const_name);
+        allocator.free(self.path);
+    }
+};
+
 /// Top-level item in a zempl file (either a Zig declaration or a zempl component)
 pub const ZemplItem = union(enum) {
     declaration: []const u8, // Source text of Zig const/var/fn declaration
     component: ZemplComponent,
+    import: ZemplImport,
 
     pub fn deinit(self: ZemplItem, allocator: std.mem.Allocator) void {
         switch (self) {
             .declaration => |decl| allocator.free(decl),
             .component => |comp| comp.deinit(allocator),
+            .import => |imp| imp.deinit(allocator),
         }
     }
 };

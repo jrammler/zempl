@@ -1,187 +1,65 @@
 const std = @import("std");
+const Location = @import("lexer.zig").Location;
 
-/// Location in source code (file, line, column)
-pub const Location = struct {
-    file_path: []const u8,
-    line: usize,
-    column: usize,
-
-    pub fn format(
-        self: Location,
-        writer: anytype,
-    ) !void {
-        try writer.print("{s}:{d}:{d}", .{ self.file_path, self.line, self.column });
-    }
-};
-
-/// Detailed error information with context
-pub const Error = struct {
-    /// Where the error occurred
+pub const ErrorDetails = struct {
     location: Location,
-
-    /// Human-readable error message
     message: []const u8,
-
-    /// Source code snippet around the error (optional)
-    context: ?[]const u8,
-
-    /// Suggestion for fixing the error (optional)
-    suggestion: ?[]const u8,
+    line: ?[]const u8,
 
     pub fn init(
         location: Location,
         message: []const u8,
-    ) Error {
+        line: ?[]const u8,
+    ) ErrorDetails {
         return .{
             .location = location,
             .message = message,
-            .context = null,
-            .suggestion = null,
-        };
-    }
-
-    pub fn withContext(self: Error, ctx: []const u8) Error {
-        return .{
-            .location = self.location,
-            .message = self.message,
-            .context = ctx,
-            .suggestion = self.suggestion,
-        };
-    }
-
-    pub fn withSuggestion(self: Error, suggestion: []const u8) Error {
-        return .{
-            .location = self.location,
-            .message = self.message,
-            .context = self.context,
-            .suggestion = suggestion,
+            .line = line,
         };
     }
 
     pub fn format(
-        self: Error,
+        self: ErrorDetails,
         writer: anytype,
     ) !void {
-        try writer.print("{f}:error: {s}\n", .{self.location, self.message});
+        try writer.print("{f}:Error: {s}\n", .{ self.location, self.message });
 
-        if (self.context) |ctx| {
+        if (self.line) |line| {
             try writer.print("  │\n", .{});
-            try writer.print("  │ {s}\n", .{ctx});
-        }
-
-        if (self.suggestion) |sugg| {
-            try writer.print("  │\n", .{});
-            try writer.print("  │ suggestion: {s}\n", .{sugg});
+            try writer.print("  │ {s}\n", .{line});
+            try writer.print("  │ {s:>[]}\n", .{ "", self.location.column });
         }
     }
 
     /// Print error to stderr with nice formatting
-    pub fn print(self: Error) void {
+    pub fn print(self: ErrorDetails) void {
         std.debug.print("{f}", .{self});
     }
 };
 
-/// Error reporter that collects multiple errors
-pub const ErrorReporter = struct {
-    errors: std.ArrayList(Error),
-    allocator: std.mem.Allocator,
-
-    pub fn init(allocator: std.mem.Allocator) ErrorReporter {
-        return .{
-            .errors = std.ArrayList(Error).empty,
-            .allocator = allocator,
-        };
-    }
-
-    pub fn deinit(self: *ErrorReporter) void {
-        self.errors.deinit(self.allocator);
-    }
-
-    pub fn report(self: *ErrorReporter, err: Error) !void {
-        try self.errors.append(self.allocator, err);
-    }
-
-    pub fn hasErrors(self: ErrorReporter) bool {
-        return self.errors.items.len > 0;
-    }
-
-    pub fn printAll(self: ErrorReporter) void {
-        for (self.errors.items) |err| {
-            err.print();
-            std.debug.print("\n", .{});
-        }
-    }
-
-    pub fn getErrorCount(self: ErrorReporter) usize {
-        return self.errors.items.len;
-    }
-};
-
-// Tests
 test "Error initialization" {
     const loc = Location{
         .file_path = "test.zempl",
-        .line = 10,
+        .row = 10,
         .column = 5,
     };
 
-    const err = Error.init(
+    const err = ErrorDetails.init(
         loc,
         "unexpected token",
+        null,
     );
 
     try std.testing.expectEqualStrings("test.zempl", err.location.file_path);
-    try std.testing.expectEqual(10, err.location.line);
+    try std.testing.expectEqual(10, err.location.row);
     try std.testing.expectEqual(5, err.location.column);
     try std.testing.expectEqualStrings("unexpected token", err.message);
-}
-
-test "Error with context and suggestion" {
-    const loc = Location{
-        .file_path = "test.zempl",
-        .line = 20,
-        .column = 8,
-    };
-
-    var err = Error.init(
-        loc,
-        "invalid syntax",
-    );
-
-    err = err.withContext("  @if (showHeader {");
-    err = err.withSuggestion("add closing parenthesis");
-
-    try std.testing.expect(err.context != null);
-    try std.testing.expect(err.suggestion != null);
-}
-
-test "ErrorReporter" {
-    const allocator = std.testing.allocator;
-    var reporter = ErrorReporter.init(allocator);
-    defer reporter.deinit();
-
-    const err1 = Error.init(.{
-        .file_path = "file1.zempl",
-        .line = 1,
-        .column = 1,
-    }, "error 1");
-    const err2 = Error.init(.{
-        .file_path = "file2.zempl",
-        .line = 5,
-        .column = 10,
-    }, "error 2");
-
-    try reporter.report(err1);
-    try reporter.report(err2);
-
-    try std.testing.expect(reporter.hasErrors());
-    try std.testing.expectEqual(@as(usize, 2), reporter.getErrorCount());
 }
 
 test "Location formatting" {
     const loc = Location{
         .file_path = "test.zempl",
-        .line = 42,
+        .row = 42,
         .column = 5,
     };
 

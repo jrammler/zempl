@@ -1,5 +1,17 @@
 const std = @import("std");
-const Location = @import("error.zig").Location;
+
+pub const Location = struct {
+    file_path: []const u8,
+    row: usize,
+    column: usize,
+
+    pub fn format(
+        self: Location,
+        writer: anytype,
+    ) !void {
+        try writer.print("{s}:{d}:{d}", .{ self.file_path, self.row, self.column });
+    }
+};
 
 /// Token types for the zempl lexer
 pub const TokenType = enum {
@@ -20,6 +32,7 @@ pub const TokenType = enum {
     rparen, // )
     pipe, // |
     comma, // ,
+    semicolon, // ;
 
     // HTML tokens
     langle, // <
@@ -49,7 +62,7 @@ pub const Lexer = struct {
     source: [:0]const u8,
     file_path: []const u8,
     index: usize,
-    line: usize,
+    row: usize,
     column: usize,
 
     pub fn init(source: [:0]const u8, file_path: []const u8) Lexer {
@@ -57,7 +70,7 @@ pub const Lexer = struct {
             .source = source,
             .file_path = file_path,
             .index = 0,
-            .line = 1,
+            .row = 1,
             .column = 1,
         };
     }
@@ -71,7 +84,7 @@ pub const Lexer = struct {
     pub fn getLocation(self: Lexer) Location {
         return .{
             .file_path = self.file_path,
-            .line = self.line,
+            .row = self.row,
             .column = self.column,
         };
     }
@@ -111,7 +124,7 @@ pub const Lexer = struct {
 
         // Update line and column
         if (ch == '\n') {
-            self.line += 1;
+            self.row += 1;
             self.column = 1;
         } else {
             self.column += 1;
@@ -248,6 +261,11 @@ pub const Lexer = struct {
             return Token.init(.comma, location, ",");
         }
 
+        if (c == ';') {
+            _ = self.advance();
+            return Token.init(.semicolon, location, ";");
+        }
+
         if (c == '!') {
             _ = self.advance();
             return Token.init(.bang, location, "!");
@@ -300,22 +318,22 @@ pub const Lexer = struct {
 
     pub fn peek(self: *Lexer) Token {
         const saved_index = self.index;
-        const saved_line = self.line;
+        const saved_line = self.row;
         const saved_column = self.column;
         const token = self.next();
         self.index = saved_index;
-        self.line = saved_line;
+        self.row = saved_line;
         self.column = saved_column;
         return token;
     }
 
     pub fn peekContent(self: *Lexer) Token {
         const saved_index = self.index;
-        const saved_line = self.line;
+        const saved_line = self.row;
         const saved_column = self.column;
         const token = self.nextContent();
         self.index = saved_index;
-        self.line = saved_line;
+        self.row = saved_line;
         self.column = saved_column;
         return token;
     }
@@ -513,7 +531,7 @@ test "Invalid token" {
     token = lexer.next();
     try std.testing.expectEqual(TokenType.invalid, token.token_type);
     try std.testing.expectEqualStrings("$", token.text);
-    try std.testing.expectEqual(@as(usize, 1), token.location.line);
+    try std.testing.expectEqual(@as(usize, 1), token.location.row);
     try std.testing.expectEqual(@as(usize, 5), token.location.column);
 }
 
@@ -524,13 +542,13 @@ test "Line and column tracking" {
     var token = lexer.next();
     try std.testing.expectEqual(TokenType.identifier, token.token_type);
     try std.testing.expectEqualStrings("div", token.text);
-    try std.testing.expectEqual(@as(usize, 1), token.location.line);
+    try std.testing.expectEqual(@as(usize, 1), token.location.row);
     try std.testing.expectEqual(@as(usize, 1), token.location.column);
 
     token = lexer.next();
     try std.testing.expectEqual(TokenType.identifier, token.token_type);
     try std.testing.expectEqualStrings("span", token.text);
-    try std.testing.expectEqual(@as(usize, 2), token.location.line);
+    try std.testing.expectEqual(@as(usize, 2), token.location.row);
     try std.testing.expectEqual(@as(usize, 1), token.location.column);
 }
 

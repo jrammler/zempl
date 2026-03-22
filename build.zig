@@ -39,7 +39,7 @@ pub fn build(b: *std.Build) !void {
     try integrationTests(b);
 }
 
-pub fn addTemplates(b: *std.Build, exe: *std.Build.Step.Compile, input_dir: std.Build.LazyPath) !void {
+pub fn addTemplates(b: *std.Build, input_file: std.Build.LazyPath) !*std.Build.Module {
     const zempl = b.addExecutable(.{
         .name = "zempl",
         .root_module = b.createModule(.{
@@ -49,18 +49,17 @@ pub fn addTemplates(b: *std.Build, exe: *std.Build.Step.Compile, input_dir: std.
     });
     const zempl_step = b.addRunArtifact(zempl);
     zempl_step.has_side_effects = true;
-    zempl_step.addDirectoryArg(input_dir);
+    zempl_step.addFileArg(input_file);
     // _ = zempl_step.addPrefixedDepFileOutputArg("--depfile=", "templates.d");
     const template_dir = zempl_step.addOutputDirectoryArg("zempl_templates");
 
     const templates_module = b.createModule(.{
-        .root_source_file = template_dir.path(b, "_templates.zig"),
+        .root_source_file = template_dir.path(b, "0.zig"),
     });
     templates_module.addAnonymousImport("zempl_runtime", .{
         .root_source_file = b.path("runtime/runtime.zig"),
     });
-
-    exe.root_module.addImport("templates", templates_module);
+    return templates_module;
 }
 
 fn integrationTests(b: *std.Build) !void {
@@ -72,7 +71,8 @@ fn integrationTests(b: *std.Build) !void {
         }),
     });
 
-    try addTemplates(b, integration_tests, b.path("test/templates"));
+    const templates = try addTemplates(b, b.path("test/templates/templates.zempl"));
+    integration_tests.root_module.addImport("templates", templates);
 
     const integration_test_step = b.step("integration", "Run the integration tests");
 

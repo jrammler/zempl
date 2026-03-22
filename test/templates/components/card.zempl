@@ -1,0 +1,20 @@
+zempl Heading(title: []const u8) {
+    <h1 class="heading">{title}</h1>
+}
+
+pub zempl Card(title: []const u8, showHeader: bool) {
+    <div class="card">
+        @if (showHeader) {
+            <div class="card-header">
+                @Heading(title)
+            </div>
+        } @else {
+            <div class="card-header">
+                <p>No header</p>
+            </div>
+        }
+        <div class="card-body">
+            <p>Welcome!</p>
+        </div>
+    </div>
+}
