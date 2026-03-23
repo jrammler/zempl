@@ -1,9 +1,7 @@
 const std = @import("std");
 
-const card = zimport("components/card.zempl");
-const Card = card.Card;
+const Card = zimport("components/card.zempl").Card;
 const list = zimport("components/list.zempl");
-const List = list.List;
 
 zempl Countdown(count: u32) {
     <div class="countdown">
@@ -32,7 +30,7 @@ pub zempl Page(name: []const u8) {
         </head>
         <body>
             @Card("Welcome", true)
-            @List(&.{ "apple", "banana", "cherry" })
+            @list.List(&.{ "apple", "banana", "cherry" })
             @Countdown(3)
             @Link("profile", 42)
         </body>

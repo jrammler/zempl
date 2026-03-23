@@ -58,7 +58,12 @@ pub const CodeGenerator = struct {
 
                 try self.writer.writeAll(imp.path);
 
-                try self.writer.writeAll("\");\n");
+                try self.writer.writeAll("\")");
+                for (imp.member_path) |segment| {
+                    try self.writer.writeAll(".");
+                    try self.writer.writeAll(segment);
+                }
+                try self.writer.writeAll(";\n");
             },
         }
     }
@@ -254,7 +259,10 @@ pub const CodeGenerator = struct {
     fn generateComponentCall(self: *CodeGenerator, call: ZemplComponentCall, indent_level: usize) Error!void {
         try self.writeIndent(indent_level);
         try self.writer.writeAll("try ");
-        try self.writer.writeAll(call.component_name);
+        for (call.component_name, 0..) |segment, i| {
+            if (i > 0) try self.writer.writeAll(".");
+            try self.writer.writeAll(segment);
+        }
         try self.writer.writeAll("(writer");
 
         // Add arguments
@@ -582,11 +590,17 @@ test "codegen generates component call" {
 
     var codegen = CodeGenerator.init(&allocating.writer);
 
+    const name = try allocator.dupe(u8, "Header");
+    const component_name = try allocator.alloc([]const u8, 1);
+    component_name[0] = name;
     const call = ZemplComponentCall{
-        .component_name = try allocator.dupe(u8, "Header"),
+        .component_name = component_name,
         .args = &.{},
     };
-    defer allocator.free(call.component_name);
+    defer {
+        allocator.free(name);
+        allocator.free(component_name);
+    }
 
     try codegen.generateComponentCall(call, 0);
 

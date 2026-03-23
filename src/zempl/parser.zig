@@ -120,6 +120,18 @@ pub const Parser = struct {
             return null;
         }
 
+        var member_path = std.ArrayList([]const u8).empty;
+        errdefer member_path.deinit(self.allocator);
+
+        while (lexer.peek().token_type == .dot) {
+            _ = lexer.next();
+            const member_token = lexer.next();
+            if (member_token.token_type != .identifier) {
+                return null;
+            }
+            try member_path.append(self.allocator, try self.allocator.dupe(u8, member_token.text));
+        }
+
         const semi_token = lexer.next();
         if (semi_token.token_type != .semicolon) {
             return null;
@@ -139,6 +151,7 @@ pub const Parser = struct {
             .const_name = const_name,
             .path = path,
             .is_public = is_public,
+            .member_path = try member_path.toOwnedSlice(self.allocator),
         };
     }
 
@@ -475,11 +488,8 @@ pub const Parser = struct {
             return self.parseForLoop();
         } else if (std.mem.eql(u8, construct_name, "@while")) {
             return self.parseWhileLoop();
-        } else if (construct_name.len > 1 and std.ascii.isUpper(construct_name[1])) {
-            return self.parseComponentCall(construct_name);
         } else {
-            self.setError(at_token.location, "unknown zempl construct");
-            return error.ParseError;
+            return self.parseComponentCall(construct_name);
         }
     }
 
@@ -668,10 +678,33 @@ pub const Parser = struct {
         } };
     }
 
-    /// Parse @Component(...) call
+    /// Parse @Component(...) or @Namespace.Component(...) call
     fn parseComponentCall(self: *Parser, component_name: []const u8) error{ ParseError, OutOfMemory }!HtmlNode {
-        const name = try self.allocator.dupe(u8, component_name[1..]);
-        errdefer self.allocator.free(name);
+        const first_name = try self.allocator.dupe(u8, component_name[1..]);
+        errdefer self.allocator.free(first_name);
+
+        var component_segments = std.ArrayList([]const u8).empty;
+        errdefer {
+            for (component_segments.items) |seg| {
+                self.allocator.free(seg);
+            }
+            component_segments.deinit(self.allocator);
+        }
+
+        try component_segments.append(self.allocator, first_name);
+
+        while (self.lexer.peek().token_type == .dot) {
+            _ = self.lexer.next();
+            const member_token = self.lexer.next();
+            if (member_token.token_type != .identifier) {
+                for (component_segments.items) |seg| {
+                    self.allocator.free(seg);
+                }
+                self.setError(member_token.location, "expected identifier after '.'");
+                return error.ParseError;
+            }
+            try component_segments.append(self.allocator, try self.allocator.dupe(u8, member_token.text));
+        }
 
         var args = std.ArrayList(ZemplArg).empty;
         errdefer {
@@ -717,7 +750,7 @@ pub const Parser = struct {
         }
 
         return HtmlNode{ .component_call = .{
-            .component_name = name,
+            .component_name = try component_segments.toOwnedSlice(self.allocator),
             .args = try args.toOwnedSlice(self.allocator),
         } };
     }
@@ -1126,7 +1159,8 @@ test "parseComponentCall handles component without args" {
     defer file.deinit(std.testing.allocator);
 
     try std.testing.expect(file.items[0].component.body[0] == .component_call);
-    try std.testing.expectEqualStrings("Header", file.items[0].component.body[0].component_call.component_name);
+    try std.testing.expectEqual(@as(usize, 1), file.items[0].component.body[0].component_call.component_name.len);
+    try std.testing.expectEqualStrings("Header", file.items[0].component.body[0].component_call.component_name[0]);
     try std.testing.expectEqual(@as(usize, 0), file.items[0].component.body[0].component_call.args.len);
 }
 
@@ -1138,7 +1172,8 @@ test "parseComponentCall handles component with args" {
     defer file.deinit(std.testing.allocator);
 
     try std.testing.expect(file.items[0].component.body[0] == .component_call);
-    try std.testing.expectEqualStrings("Button", file.items[0].component.body[0].component_call.component_name);
+    try std.testing.expectEqual(@as(usize, 1), file.items[0].component.body[0].component_call.component_name.len);
+    try std.testing.expectEqualStrings("Button", file.items[0].component.body[0].component_call.component_name[0]);
 }
 
 test "parseComponentCall handles component with multiple args" {
@@ -1149,7 +1184,77 @@ test "parseComponentCall handles component with multiple args" {
     defer file.deinit(std.testing.allocator);
 
     try std.testing.expect(file.items[0].component.body[0] == .component_call);
-    try std.testing.expectEqualStrings("Card", file.items[0].component.body[0].component_call.component_name);
+    try std.testing.expectEqual(@as(usize, 1), file.items[0].component.body[0].component_call.component_name.len);
+    try std.testing.expectEqualStrings("Card", file.items[0].component.body[0].component_call.component_name[0]);
+}
+
+test "parseZimport handles zimport with member path" {
+    const source = "const Button = zimport(\"components.zempl\").Button;";
+    var lexer = Lexer.init(source, "test.zempl");
+    var parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
+    const file = try parser.parseFile();
+    defer file.deinit(std.testing.allocator);
+
+    try std.testing.expect(file.items[0] == .import);
+    try std.testing.expectEqualStrings("Button", file.items[0].import.const_name);
+    try std.testing.expectEqualStrings("components.zempl", file.items[0].import.path);
+    try std.testing.expectEqual(@as(usize, 1), file.items[0].import.member_path.len);
+    try std.testing.expectEqualStrings("Button", file.items[0].import.member_path[0]);
+}
+
+test "parseZimport handles zimport with nested member path" {
+    const source = "const Button = zimport(\"components.zempl\").basic.Button;";
+    var lexer = Lexer.init(source, "test.zempl");
+    var parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
+    const file = try parser.parseFile();
+    defer file.deinit(std.testing.allocator);
+
+    try std.testing.expect(file.items[0] == .import);
+    try std.testing.expectEqualStrings("Button", file.items[0].import.const_name);
+    try std.testing.expectEqualStrings("components.zempl", file.items[0].import.path);
+    try std.testing.expectEqual(@as(usize, 2), file.items[0].import.member_path.len);
+    try std.testing.expectEqualStrings("basic", file.items[0].import.member_path[0]);
+    try std.testing.expectEqualStrings("Button", file.items[0].import.member_path[1]);
+}
+
+test "parseZimport handles zimport without member path" {
+    const source = "const components = zimport(\"components.zempl\");";
+    var lexer = Lexer.init(source, "test.zempl");
+    var parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
+    const file = try parser.parseFile();
+    defer file.deinit(std.testing.allocator);
+
+    try std.testing.expect(file.items[0] == .import);
+    try std.testing.expectEqualStrings("components", file.items[0].import.const_name);
+    try std.testing.expectEqualStrings("components.zempl", file.items[0].import.path);
+    try std.testing.expectEqual(@as(usize, 0), file.items[0].import.member_path.len);
+}
+
+test "parseComponentCall handles namespaced component" {
+    const source = "zempl Test() { @components.Button(\"hello\") }";
+    var lexer = Lexer.init(source, "test.zempl");
+    var parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
+    const file = try parser.parseFile();
+    defer file.deinit(std.testing.allocator);
+
+    try std.testing.expect(file.items[0].component.body[0] == .component_call);
+    try std.testing.expectEqual(@as(usize, 2), file.items[0].component.body[0].component_call.component_name.len);
+    try std.testing.expectEqualStrings("components", file.items[0].component.body[0].component_call.component_name[0]);
+    try std.testing.expectEqualStrings("Button", file.items[0].component.body[0].component_call.component_name[1]);
+}
+
+test "parseComponentCall handles deeply namespaced component" {
+    const source = "zempl Test() { @components.nested.Button(\"hello\") }";
+    var lexer = Lexer.init(source, "test.zempl");
+    var parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
+    const file = try parser.parseFile();
+    defer file.deinit(std.testing.allocator);
+
+    try std.testing.expect(file.items[0].component.body[0] == .component_call);
+    try std.testing.expectEqual(@as(usize, 3), file.items[0].component.body[0].component_call.component_name.len);
+    try std.testing.expectEqualStrings("components", file.items[0].component.body[0].component_call.component_name[0]);
+    try std.testing.expectEqualStrings("nested", file.items[0].component.body[0].component_call.component_name[1]);
+    try std.testing.expectEqualStrings("Button", file.items[0].component.body[0].component_call.component_name[2]);
 }
 
 test "parseHtmlElementOrComment handles self-closing tag" {

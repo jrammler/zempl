@@ -107,12 +107,15 @@ pub const ZemplCodeBlock = struct {
     }
 };
 
-/// Component call @Component(args)
+/// Component call @Component(args) or @Namespace.Component(args)
 pub const ZemplComponentCall = struct {
-    component_name: []const u8,
+    component_name: [][]const u8,
     args: []ZemplArg,
 
     pub fn deinit(self: ZemplComponentCall, allocator: std.mem.Allocator) void {
+        for (self.component_name) |segment| {
+            allocator.free(segment);
+        }
         allocator.free(self.component_name);
         for (self.args) |arg| {
             arg.deinit(allocator);
@@ -207,10 +210,15 @@ pub const ZemplImport = struct {
     const_name: []const u8,
     path: []const u8,
     is_public: bool,
+    member_path: [][]const u8,
 
     pub fn deinit(self: ZemplImport, allocator: std.mem.Allocator) void {
         allocator.free(self.const_name);
         allocator.free(self.path);
+        for (self.member_path) |segment| {
+            allocator.free(segment);
+        }
+        allocator.free(self.member_path);
     }
 };
 

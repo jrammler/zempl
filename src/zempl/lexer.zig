@@ -35,6 +35,7 @@ pub const TokenType = enum {
     pipe, // |
     comma, // ,
     semicolon, // ;
+    dot, // .
 
     // HTML tokens
     langle, // <
@@ -210,27 +211,6 @@ pub const Lexer = struct {
 
         const c = ch.?;
 
-        // Check for HTML tokens
-        if (c == '<') {
-            _ = self.advance();
-            return Token.init(.langle, location, "<");
-        }
-
-        if (c == '>') {
-            _ = self.advance();
-            return Token.init(.rangle, location, ">");
-        }
-
-        if (c == '/') {
-            _ = self.advance();
-            return Token.init(.slash, location, "/");
-        }
-
-        if (c == '=') {
-            _ = self.advance();
-            return Token.init(.equal, location, "=");
-        }
-
         // Check for zempl tokens
         if (c == '{') {
             _ = self.advance();
@@ -265,6 +245,32 @@ pub const Lexer = struct {
         if (c == ';') {
             _ = self.advance();
             return Token.init(.semicolon, location, ";");
+        }
+
+        if (c == '.') {
+            _ = self.advance();
+            return Token.init(.dot, location, ".");
+        }
+
+        // Check for HTML tokens
+        if (c == '<') {
+            _ = self.advance();
+            return Token.init(.langle, location, "<");
+        }
+
+        if (c == '>') {
+            _ = self.advance();
+            return Token.init(.rangle, location, ">");
+        }
+
+        if (c == '/') {
+            _ = self.advance();
+            return Token.init(.slash, location, "/");
+        }
+
+        if (c == '=') {
+            _ = self.advance();
+            return Token.init(.equal, location, "=");
         }
 
         if (c == '!') {
