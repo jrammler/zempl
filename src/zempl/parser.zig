@@ -248,7 +248,7 @@ pub const Parser = struct {
 
         while (true) {
             const token = self.lexer.peek();
-            token: switch (token.token_type) {
+            switch (token.token_type) {
                 .rbrace => {
                     _ = self.lexer.next();
                     if (current_tag_name.len > 0) {
@@ -271,13 +271,9 @@ pub const Parser = struct {
                     const node = try self.parseCodeBlock();
                     try nodes.append(self.allocator, node);
                 },
-                .identifier => {
-                    if (std.mem.startsWith(u8, token.text, "@")) {
-                        const node = try self.parseZemplConstruct();
-                        try nodes.append(self.allocator, node);
-                    } else {
-                        continue :token .text;
-                    }
+                .at_identifier => {
+                    const node = try self.parseZemplConstruct();
+                    try nodes.append(self.allocator, node);
                 },
                 else => {
                     const node = try self.parseTextContent();
@@ -323,17 +319,25 @@ pub const Parser = struct {
 
     /// Parse HTML declaration (comment or doctype declaration)
     fn parseDeclaration(self: *Parser) error{ ParseError, OutOfMemory }!HtmlNode {
-        const text_token = self.lexer.nextContent();
+        const start_loc = self.lexer.getLocation();
+        var end_loc = start_loc;
 
-        const rangle = self.lexer.next();
-        if (rangle.token_type != .rangle) {
-            self.setError(rangle.location, "unclosed comment");
-            return error.ParseError;
+        while (true) {
+            const token = self.lexer.next();
+            end_loc = token.location;
+
+            if (token.token_type == .eof) {
+                self.setError(start_loc, "unclosed comment");
+                return error.ParseError;
+            }
+            if (token.token_type == .rangle)
+                break;
         }
 
+        const text = self.lexer.source[start_loc.index..end_loc.index];
         return HtmlNode{
             .declaration = .{
-                .content = try self.allocator.dupe(u8, text_token.text),
+                .content = try self.allocator.dupe(u8, text),
             },
         };
     }
@@ -446,17 +450,51 @@ pub const Parser = struct {
 
     /// Parse text content using nextContent
     fn parseTextContent(self: *Parser) error{ ParseError, OutOfMemory }!HtmlNode {
-        const token = self.lexer.nextContent();
+        const start_loc = self.lexer.getLocation();
+        var end_loc = start_loc;
 
-        if (token.token_type == .eof) {
-            self.setError(token.location, "unexpected end of file");
-            return error.ParseError;
+        var content = std.ArrayList(u8).empty;
+        errdefer content.deinit(self.allocator);
+
+        var text_start = self.lexer.getPosition();
+
+        while (true) {
+            const token = self.lexer.peek();
+            end_loc = token.location;
+
+            if (token.token_type == .eof) {
+                self.setError(start_loc, "unclosed html content");
+                return error.ParseError;
+            }
+            if (token.token_type == .langle)
+                break;
+            if (token.token_type == .rangle)
+                break;
+            if (token.token_type == .lbrace)
+                break;
+            if (token.token_type == .rbrace)
+                break;
+            if (token.token_type == .at_lbrace)
+                break;
+            if (token.token_type == .at_identifier)
+                break;
+
+            if (token.token_type == .at_at) {
+                try content.appendSlice(self.allocator, self.lexer.source[text_start..end_loc.index]);
+                _ = self.lexer.next();
+                try content.append(self.allocator, '@');
+                text_start = self.lexer.getPosition();
+                continue;
+            }
+
+            _ = self.lexer.next();
         }
 
-        std.debug.assert(token.token_type == .text);
+        try content.appendSlice(self.allocator, self.lexer.source[text_start..end_loc.index]);
 
+        const text = try content.toOwnedSlice(self.allocator);
         return HtmlNode{ .text = .{
-            .content = try self.allocator.dupe(u8, token.text),
+            .content = text,
         } };
     }
 
@@ -497,7 +535,7 @@ pub const Parser = struct {
     fn parseIfStatement(self: *Parser) error{ ParseError, OutOfMemory }!HtmlNode {
         const lparen_token = self.lexer.next();
         if (lparen_token.token_type != .lparen) {
-            self.setError(lparen_token.location, "expected '('");
+            self.setError(lparen_token.location, "expected '(' after '@if'. Use '@@' for literal '@'");
             return error.ParseError;
         }
 
@@ -526,7 +564,7 @@ pub const Parser = struct {
 
         var else_body: ?[]HtmlNode = null;
         const next_token = self.lexer.peek();
-        if (next_token.token_type == .identifier and std.mem.eql(u8, next_token.text, "@else")) {
+        if (next_token.token_type == .at_identifier and std.mem.eql(u8, next_token.text, "@else")) {
             _ = self.lexer.next();
 
             const else_lbrace = self.lexer.next();
@@ -549,7 +587,7 @@ pub const Parser = struct {
     fn parseForLoop(self: *Parser) error{ ParseError, OutOfMemory }!HtmlNode {
         const lparen_token = self.lexer.next();
         if (lparen_token.token_type != .lparen) {
-            self.setError(lparen_token.location, "expected '('");
+            self.setError(lparen_token.location, "expected '(' after '@for'. Use '@@' for literal '@'");
             return error.ParseError;
         }
 
@@ -623,7 +661,7 @@ pub const Parser = struct {
     fn parseWhileLoop(self: *Parser) error{ ParseError, OutOfMemory }!HtmlNode {
         const lparen_token = self.lexer.next();
         if (lparen_token.token_type != .lparen) {
-            self.setError(lparen_token.location, "expected '('");
+            self.setError(lparen_token.location, "expected '(' after '@while'. Use '@@' for literal '@'");
             return error.ParseError;
         }
 
@@ -680,9 +718,6 @@ pub const Parser = struct {
 
     /// Parse @Component(...) or @Namespace.Component(...) call
     fn parseComponentCall(self: *Parser, component_name: []const u8) error{ ParseError, OutOfMemory }!HtmlNode {
-        const first_name = try self.allocator.dupe(u8, component_name[1..]);
-        errdefer self.allocator.free(first_name);
-
         var component_segments = std.ArrayList([]const u8).empty;
         errdefer {
             for (component_segments.items) |seg| {
@@ -691,7 +726,12 @@ pub const Parser = struct {
             component_segments.deinit(self.allocator);
         }
 
-        try component_segments.append(self.allocator, first_name);
+        {
+            const first_name = try self.allocator.dupe(u8, component_name[1..]);
+            errdefer self.allocator.free(first_name);
+
+            try component_segments.append(self.allocator, first_name);
+        }
 
         while (self.lexer.peek().token_type == .dot) {
             _ = self.lexer.next();
@@ -716,7 +756,7 @@ pub const Parser = struct {
 
         const lparen_token = self.lexer.next();
         if (lparen_token.token_type != .lparen) {
-            self.setError(lparen_token.location, "expected '('");
+            self.setError(lparen_token.location, "expected '(' for component call. Use '@@' for literal '@'");
             return error.ParseError;
         }
 
@@ -1051,6 +1091,17 @@ test "parseCodeBlock handles multiline code block" {
     defer file.deinit(std.testing.allocator);
 
     try std.testing.expect(file.items[0].component.body[0].element.children[0] == .code_block);
+}
+
+test "parseCodeBlock handles code block with text before" {
+    const source = "zempl Test() { <div>hello@{\n  const x = 1;\n}</div> }";
+    var lexer = Lexer.init(source, "test.zempl");
+    var parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
+    const file = try parser.parseFile();
+    defer file.deinit(std.testing.allocator);
+
+    try std.testing.expect(file.items[0].component.body[0].element.children[0] == .text);
+    try std.testing.expect(file.items[0].component.body[0].element.children[1] == .code_block);
 }
 
 test "parseZemplConstruct handles @if statement" {

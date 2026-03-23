@@ -33,6 +33,10 @@ pub zempl Page(name: []const u8) {
             @list.List(&.{ "apple", "banana", "cherry" })
             @Countdown(3)
             @Link("profile", 42)
+
+            <div>
+                <span>Send feedback to <a href="mailto:info@example.com">info@@example.com</a></span>
+            </div>
         </body>
     </html>
 }
