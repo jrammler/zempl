@@ -2,25 +2,53 @@
 
 Zempl is an HTML template engine for Zig. It transforms `.zempl` files into `.zig` source code at compile time, producing functions that write directly to a `std.Io.Writer` without any memory allocation.
 
-## Installation
+## Usage
 
-### Using zig fetch
+### Add dependency using zig fetch
 
 ```bash
 zig fetch --save "git+https://github.com/jrammler/zempl#main"
 ```
 
-### Adding to build.zig
+### Build templates in build.zig
 
 In your `build.zig`, add the zempl templates as a module:
 
 ```zig
-const zempl = b.dependency("zempl", .{});
-const templates = try zempl.addTemplates(b, b.path("path/to/templates.zempl"));
-my_module.root_module.addImport("templates", templates);
+const std = @import("std");
+const zempl = @import("zempl");
+
+pub fn build(b: *std.Build) void {
+    ...
+    const templates = try zempl.buildTemplateModule(b, b.path("path/to/templates.zempl"));
+    exe.root_module.addImport("templates", templates);
+    ...
+}
 ```
 
 The templates are compiled into a module you can import in your Zig code.
+
+Each public component becomes a function `fn(writer: *std.Io.Writer, params...) !void`.
+
+### Calling Templates
+
+Import the templates module and call components like regular functions:
+
+```zig
+const std = @import("std");
+const templates = @import("templates");
+
+pub fn main() !void {
+    var buf: [1024]u8 = undefined;
+    const stdout = std.fs.File.stdout();
+    var file_writer = stdout.writer(&buf);
+    const writer = &file_writer.interface;
+
+    try templates.Page(writer, "Hello");
+
+    try writer.flush();
+}
+```
 
 ## Syntax
 
@@ -201,35 +229,6 @@ Escape `@` in text with `@@`:
 ```zig
 <span>Email: <a href="mailto:info@example.com">info@@example.com</a></span>
 ```
-
-## Usage
-
-### CLI
-
-Run zempl to compile templates:
-
-```bash
-zempl entry.zempl output_dir
-```
-
-This compiles `entry.zempl` and all its imports, outputting `.zig` files to `output_dir/`.
-
-### Calling Templates
-
-Import the templates module and call components like regular functions:
-
-```zig
-const templates = @import("templates");
-
-pub fn main() !void {
-    var writer: std.io.Writer.Allocating = .init(allocator);
-    defer writer.deinit();
-
-    try templates.example.Page(&writer.writer, "My Title");
-}
-```
-
-Each public component becomes a function `fn(writer: *std.Io.Writer, params...) !void`.
 
 ## Runtime
 
