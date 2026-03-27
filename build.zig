@@ -15,7 +15,7 @@ pub fn build(b: *std.Build) !void {
     b.installArtifact(zempl);
 
     const runtime = b.addModule("runtime", .{
-        .root_source_file = b.path("runtime/runtime.zig"),
+        .root_source_file = b.path("src/runtime/runtime.zig"),
     });
 
     const run_step = b.step("run", "Run the app");
