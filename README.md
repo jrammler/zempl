@@ -2,6 +2,8 @@
 
 Zempl is an HTML template engine for Zig. It transforms `.zempl` files into `.zig` source code at compile time, producing functions that write directly to a `std.Io.Writer` without any memory allocation.
 
+This project was heavily inspired by [templ](https://github.com/a-h/templ).
+
 ## Usage
 
 ### Add dependency using zig fetch
