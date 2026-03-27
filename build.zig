@@ -36,18 +36,16 @@ pub fn build(b: *std.Build) !void {
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_exe_tests.step);
 
-    try integrationTests(b);
+    try integrationTests(b, exe);
 }
 
-pub fn addTemplates(b: *std.Build, input_file: std.Build.LazyPath) !*std.Build.Module {
-    const zempl = b.addExecutable(.{
-        .name = "zempl",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/main.zig"),
-            .target = b.graph.host,
-        }),
-    });
-    const zempl_step = b.addRunArtifact(zempl);
+pub fn buildTemplateModule(b: *std.Build, input_file: std.Build.LazyPath) !*std.Build.Module {
+    const zempl = b.dependency("zempl", .{});
+    return buildTemplateModuleIntern(b, zempl.artifact("zempl"), input_file);
+}
+
+fn buildTemplateModuleIntern(b: *std.Build, zempl_module: *std.Build.Step.Compile, input_file: std.Build.LazyPath) !*std.Build.Module {
+    const zempl_step = b.addRunArtifact(zempl_module);
     zempl_step.has_side_effects = true;
     zempl_step.addFileArg(input_file);
     // _ = zempl_step.addPrefixedDepFileOutputArg("--depfile=", "templates.d");
@@ -62,7 +60,7 @@ pub fn addTemplates(b: *std.Build, input_file: std.Build.LazyPath) !*std.Build.M
     return templates_module;
 }
 
-fn integrationTests(b: *std.Build) !void {
+fn integrationTests(b: *std.Build, zempl_module: *std.Build.Step.Compile) !void {
     const integration_tests = b.addExecutable(.{
         .name = "integration_tests",
         .root_module = b.createModule(.{
@@ -71,7 +69,7 @@ fn integrationTests(b: *std.Build) !void {
         }),
     });
 
-    const templates = try addTemplates(b, b.path("test/templates/templates.zempl"));
+    const templates = try buildTemplateModuleIntern(b, zempl_module, b.path("test/templates/templates.zempl"));
     integration_tests.root_module.addImport("templates", templates);
 
     const integration_test_step = b.step("integration", "Run the integration tests");

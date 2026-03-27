@@ -7,7 +7,7 @@ Zempl is an HTML template engine for Zig. It transforms `.zempl` files into `.zi
 ### Using zig fetch
 
 ```bash
-zig fetch --save "git+https://github.com/jrammler/zempl#master"
+zig fetch --save "git+https://github.com/jrammler/zempl#main"
 ```
 
 ### Adding to build.zig
