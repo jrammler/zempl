@@ -1,3 +1,11 @@
+// This file is a copy from the zig source code.
+// See LICENSE in this directory.
+//
+// Changes:
+// - Make some functions public to enable parsing of expressions
+// - Remove test reference
+// - Import std from standard library instead of relative path
+
 //! Represents in-progress parsing, will be converted to an Ast after completion.
 
 pub const Error = error{ParseError} || Allocator.Error;
