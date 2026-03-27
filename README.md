@@ -1,28 +1,13 @@
 # Zempl
 
-Zempl is an HTML template engine for Zig. It transforms `.zempl` files into `.zig` source code at compile time, producing functions that write directly to a `std.io.Writer` without any memory allocation.
-
-Templates are compiled into regular Zig code, meaning they integrate seamlessly with Zig's type system and optimizer. The generated functions take a writer and output parameters, rendering HTML directly without intermediate data structures.
+Zempl is an HTML template engine for Zig. It transforms `.zempl` files into `.zig` source code at compile time, producing functions that write directly to a `std.Io.Writer` without any memory allocation.
 
 ## Installation
 
 ### Using zig fetch
 
-Add to your `build.zig.zon`:
-
-```zig
-.dependencies = .{
-    .zempl = .{
-        .url = "https://github.com/yourusername/zempl/archive/<commit>.tar.gz",
-        .hash = "<hash>",
-    },
-},
-```
-
-Then fetch it:
-
 ```bash
-zig fetch
+zig fetch --save "git+https://github.com/jrammler/zempl#master"
 ```
 
 ### Adding to build.zig
@@ -244,7 +229,7 @@ pub fn main() !void {
 }
 ```
 
-Each public component becomes a function `fn(writer: *std.io.Writer, params...) !void`.
+Each public component becomes a function `fn(writer: *std.Io.Writer, params...) !void`.
 
 ## Runtime
 
