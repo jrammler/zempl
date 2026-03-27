@@ -1,6 +1,8 @@
 # Zempl
 
-A template engine for Zig that transforms `.zempl` files into `.zig` source code.
+Zempl is an HTML template engine for Zig. It transforms `.zempl` files into `.zig` source code at compile time, producing functions that write directly to a `std.io.Writer` without any memory allocation.
+
+Templates are compiled into regular Zig code, meaning they integrate seamlessly with Zig's type system and optimizer. The generated functions take a writer and output parameters, rendering HTML directly without intermediate data structures.
 
 ## Installation
 
@@ -217,6 +219,8 @@ Escape `@` in text with `@@`:
 
 ## Usage
 
+### CLI
+
 Run zempl to compile templates:
 
 ```bash
@@ -224,6 +228,23 @@ zempl entry.zempl output_dir
 ```
 
 This compiles `entry.zempl` and all its imports, outputting `.zig` files to `output_dir/`.
+
+### Calling Templates
+
+Import the templates module and call components like regular functions:
+
+```zig
+const templates = @import("templates");
+
+pub fn main() !void {
+    var writer: std.io.Writer.Allocating = .init(allocator);
+    defer writer.deinit();
+
+    try templates.example.Page(&writer.writer, "My Title");
+}
+```
+
+Each public component becomes a function `fn(writer: *std.io.Writer, params...) !void`.
 
 ## Runtime
 
