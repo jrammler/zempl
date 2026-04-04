@@ -1,6 +1,6 @@
 .{
     .name = .zempl,
-    .version = "0.0.0",
+    .version = "0.1.0",
     .minimum_zig_version = "0.15.2",
     .dependencies = .{},
     .fingerprint = 0x528c04b442be55f3,
