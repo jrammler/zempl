@@ -13,6 +13,7 @@ const ZemplExpression = @import("ast.zig").ZemplExpression;
 const ZemplCodeBlock = @import("ast.zig").ZemplCodeBlock;
 const ZemplArg = @import("ast.zig").ZemplArg;
 const HtmlAttribute = @import("ast.zig").HtmlAttribute;
+const AttributeValueSegment = @import("ast.zig").AttributeValueSegment;
 
 const Error = error{
     WriteFailed,
@@ -119,12 +120,46 @@ pub const CodeGenerator = struct {
 
         // Attributes
         for (element.attributes) |attr| {
-            try self.writeIndent(indent_level);
-            try self.writer.writeAll("try @import(\"zempl_runtime\").escapeAttribute(writer, \"");
-            try self.writer.writeAll(attr.name);
-            try self.writer.writeAll("\", ");
-            try self.writer.writeAll(attr.value);
-            try self.writer.writeAll(");\n");
+            if (attr.value.len == 0) {
+                // Static boolean attribute: just the name
+                try self.writeIndent(indent_level);
+                try self.writer.writeAll("try writer.writeAll(\" ");
+                try self.writer.writeAll(attr.name);
+                try self.writer.writeAll("\");\n");
+            } else if (attr.value.len == 1 and attr.value[0] == .expression) {
+                // Single expression: let runtime handle bool vs value
+                const expr = attr.value[0].expression;
+                try self.writeIndent(indent_level);
+                try self.writer.writeAll("try @import(\"zempl_runtime\").writeAttribute(writer, \"");
+                try self.writer.writeAll(attr.name);
+                try self.writer.writeAll("\", ");
+                try self.writer.writeAll(expr);
+                try self.writer.writeAll(");\n");
+            } else {
+                // Normal attribute with value segments
+                try self.writeIndent(indent_level);
+                try self.writer.writeAll("try writer.writeAll(\" ");
+                try self.writer.writeAll(attr.name);
+                try self.writer.writeAll("=\\\"\");\n");
+                for (attr.value) |segment| {
+                    switch (segment) {
+                        .literal => |text| {
+                            try self.writeIndent(indent_level);
+                            try self.writer.writeAll("try @import(\"zempl_runtime\").escapeHtml(writer, \"");
+                            try self.escapeAndWriteString(text);
+                            try self.writer.writeAll("\");\n");
+                        },
+                        .expression => |expr| {
+                            try self.writeIndent(indent_level);
+                            try self.writer.writeAll("try @import(\"zempl_runtime\").escapeHtml(writer, ");
+                            try self.writer.writeAll(expr);
+                            try self.writer.writeAll(");\n");
+                        },
+                    }
+                }
+                try self.writeIndent(indent_level);
+                try self.writer.writeAll("try writer.writeAll(\"\\\"\");\n");
+            }
         }
 
         // Close opening tag
@@ -479,14 +514,14 @@ test "codegen generates element with attributes" {
     const attributes = try allocator.alloc(HtmlAttribute, 2);
     attributes[0] = .{
         .name = try allocator.dupe(u8, "class"),
-        .value = try allocator.dupe(u8, "\"container\""), // Static string value
-
+        .value = try allocator.alloc(AttributeValueSegment, 1),
     };
+    attributes[0].value[0] = .{ .literal = try allocator.dupe(u8, "container") };
     attributes[1] = .{
         .name = try allocator.dupe(u8, "id"),
-        .value = try allocator.dupe(u8, "\"main\""), // Static string with single quotes
-
+        .value = try allocator.alloc(AttributeValueSegment, 1),
     };
+    attributes[1].value[0] = .{ .literal = try allocator.dupe(u8, "main") };
 
     const element = HtmlElement{
         .tag_name = try allocator.dupe(u8, "div"),
@@ -499,6 +534,7 @@ test "codegen generates element with attributes" {
         allocator.free(element.tag_name);
         for (attributes) |attr| {
             allocator.free(attr.name);
+            for (attr.value) |seg| seg.deinit(allocator);
             allocator.free(attr.value);
         }
         allocator.free(attributes);
@@ -509,8 +545,12 @@ test "codegen generates element with attributes" {
     const output = allocating.written();
     try std.testing.expectEqualStrings(
         \\try writer.writeAll("<div");
-        \\try @import("zempl_runtime").escapeAttribute(writer, "class", "container");
-        \\try @import("zempl_runtime").escapeAttribute(writer, "id", "main");
+        \\try writer.writeAll(" class=\"");
+        \\try @import("zempl_runtime").escapeHtml(writer, "container");
+        \\try writer.writeAll("\"");
+        \\try writer.writeAll(" id=\"");
+        \\try @import("zempl_runtime").escapeHtml(writer, "main");
+        \\try writer.writeAll("\"");
         \\try writer.writeAll(">");
         \\try writer.writeAll("</div>");
         \\
@@ -528,9 +568,9 @@ test "codegen generates element with dynamic attribute values" {
     const attributes = try allocator.alloc(HtmlAttribute, 1);
     attributes[0] = .{
         .name = try allocator.dupe(u8, "class"),
-        .value = try allocator.dupe(u8, "myClass"), // Expression value (no quotes)
-
+        .value = try allocator.alloc(AttributeValueSegment, 1),
     };
+    attributes[0].value[0] = .{ .expression = try allocator.dupe(u8, "myClass") };
 
     const element = HtmlElement{
         .tag_name = try allocator.dupe(u8, "div"),
@@ -543,6 +583,7 @@ test "codegen generates element with dynamic attribute values" {
         allocator.free(element.tag_name);
         for (attributes) |attr| {
             allocator.free(attr.name);
+            for (attr.value) |seg| seg.deinit(allocator);
             allocator.free(attr.value);
         }
         allocator.free(attributes);
@@ -553,9 +594,96 @@ test "codegen generates element with dynamic attribute values" {
     const output = allocating.written();
     try std.testing.expectEqualStrings(
         \\try writer.writeAll("<div");
-        \\try @import("zempl_runtime").escapeAttribute(writer, "class", myClass);
+        \\try @import("zempl_runtime").writeAttribute(writer, "class", myClass);
         \\try writer.writeAll(">");
         \\try writer.writeAll("</div>");
+        \\
+    , output);
+}
+
+test "codegen generates element with interpolated attribute" {
+    const allocator = std.testing.allocator;
+
+    var allocating = std.Io.Writer.Allocating.init(allocator);
+    defer allocating.deinit();
+
+    var codegen = CodeGenerator.init(&allocating.writer);
+
+    const attributes = try allocator.alloc(HtmlAttribute, 1);
+    attributes[0] = .{
+        .name = try allocator.dupe(u8, "href"),
+        .value = try allocator.alloc(AttributeValueSegment, 2),
+    };
+    attributes[0].value[0] = .{ .literal = try allocator.dupe(u8, "/items/") };
+    attributes[0].value[1] = .{ .expression = try allocator.dupe(u8, "id") };
+
+    const element = HtmlElement{
+        .tag_name = try allocator.dupe(u8, "a"),
+        .attributes = attributes,
+        .children = &.{},
+        .is_void = false,
+    };
+
+    defer {
+        allocator.free(element.tag_name);
+        for (attributes) |attr| {
+            allocator.free(attr.name);
+            for (attr.value) |seg| seg.deinit(allocator);
+            allocator.free(attr.value);
+        }
+        allocator.free(attributes);
+    }
+
+    try codegen.generateElement(element, 0);
+
+    const output = allocating.written();
+    try std.testing.expectEqualStrings(
+        \\try writer.writeAll("<a");
+        \\try writer.writeAll(" href=\"");
+        \\try @import("zempl_runtime").escapeHtml(writer, "/items/");
+        \\try @import("zempl_runtime").escapeHtml(writer, id);
+        \\try writer.writeAll("\"");
+        \\try writer.writeAll(">");
+        \\try writer.writeAll("</a>");
+        \\
+    , output);
+}
+
+test "codegen generates static boolean attribute" {
+    const allocator = std.testing.allocator;
+
+    var allocating = std.Io.Writer.Allocating.init(allocator);
+    defer allocating.deinit();
+
+    var codegen = CodeGenerator.init(&allocating.writer);
+
+    const attributes = try allocator.alloc(HtmlAttribute, 1);
+    attributes[0] = .{
+        .name = try allocator.dupe(u8, "disabled"),
+        .value = &.{},
+    };
+
+    const element = HtmlElement{
+        .tag_name = try allocator.dupe(u8, "input"),
+        .attributes = attributes,
+        .children = &.{},
+        .is_void = false,
+    };
+
+    defer {
+        allocator.free(element.tag_name);
+        allocator.free(attributes[0].name);
+        allocator.free(attributes);
+    }
+
+    try codegen.generateElement(element, 0);
+
+    const output = allocating.written();
+    try std.testing.expectEqualStrings(
+        \\try writer.writeAll("<input");
+        \\try writer.writeAll(" disabled");
+        \\try writer.writeAll(">");
+        \\try writer.writeAll("</input>");
         \\
     , output);
 }

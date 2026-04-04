@@ -7,29 +7,32 @@ pub fn escapeHtml(writer: *std.Io.Writer, value: anytype) !void {
         .pointer => |pointer| {
             if (pointer.size == .slice or pointer.size == .many) {
                 if (pointer.child != u8)
-                    @compileError("Unsupported type: " ++ value_type);
+                    @compileError("Unsupported type: " ++ @tagName(value_type));
                 try escapeHtmlString(writer, value);
             } else if (pointer.size == .one) {
                 const child_info = @typeInfo(pointer.child);
                 if (child_info != .array or child_info.array.child != u8)
-                    @compileError("Unsupported type: " ++ value_type);
+                    @compileError("Unsupported type: " ++ @tagName(value_type));
                 try escapeHtmlString(writer, value);
             } else {
-                @compileError("Unsupported type: " ++ value_type);
+                @compileError("Unsupported type: " ++ @tagName(value_type));
             }
         },
-        else => @compileError("Unsupported type: " ++ value_type),
+        else => @compileError("Unsupported type: " ++ @tagName(value_type)),
     }
 }
 
-pub fn escapeAttribute(writer: *std.Io.Writer, comptime name: []const u8, value: anytype) !void {
+pub fn writeAttribute(writer: *std.Io.Writer, comptime name: []const u8, value: anytype) !void {
     const value_type = @typeInfo(@TypeOf(value));
-    if (value_type == .bool and !value)
+    if (value_type == .bool) {
+        if (value) {
+            try writer.writeAll(" ");
+            try writer.writeAll(name);
+        }
         return;
+    }
     try writer.writeAll(" ");
-    try escapeHtmlString(writer, name);
-    if (value_type == .bool)
-        return;
+    try writer.writeAll(name);
     try writer.writeAll("=\"");
     try escapeHtml(writer, value);
     try writer.writeAll("\"");

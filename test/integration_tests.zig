@@ -8,9 +8,9 @@ pub fn main() !void {
     var writer: std.Io.Writer.Allocating = .init(allocator);
     defer writer.deinit();
 
-    try templates.example.Page(&writer.writer, "My Title");
+    try templates.example.Page(&writer.writer, "My Title", false);
 
     try std.testing.expectEqualStrings(
-        \\<!DOCTYPE html><html><head><title>My Title</title></head><body><div class="card"><div class="card-header"><h1 class="heading">Welcome</h1></div><div class="card-body"><p>Welcome!</p></div></div><ul><li>apple</li><li>banana</li><li>cherry</li></ul><div class="countdown"><span>3</span><span>2</span><span>1</span><span>Done!</span></div><a href="/profile/42">Click here</a><div><span>Send feedback to <a href="mailto:info@example.com">info@example.com</a></span></div></body></html>
+        \\<!DOCTYPE html><html><head><title>My Title</title></head><body><div class="card"><div class="card-header"><h1 class="heading">Welcome</h1></div><div class="card-body"><p>Welcome!</p></div></div><ul><li>apple</li><li>banana</li><li>cherry</li></ul><div class="countdown"><span>3</span><span>2</span><span>1</span><span>Done!</span></div><a href="/profile/42">Click here</a><a href="/profile/42">Or here</a><div><span>Send feedback to <a href="mailto:info@example.com">info@example.com</a></span></div><input disabled><input></body></html>
     , writer.written());
 }

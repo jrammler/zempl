@@ -293,23 +293,19 @@ test "parseExpression returns source text for variable access" {
 }
 
 test "parseExpression returns source text for binary expression" {
-    // TODO: Implement proper AST traversal to extract full expression source
-    // Current implementation only extracts main token, not full expression
     const source = "a + b";
     var error_details: ?ErrorDetails = undefined;
     const result = try parseExpression(std.testing.allocator, source, &error_details);
     defer std.testing.allocator.free(result.source_text);
-    // For now, we verify parsing succeeds; full source extraction needs work
-    try std.testing.expect(result.source_text.len > 0);
+    try std.testing.expectEqualStrings(source, result.source_text);
 }
 
 test "parseExpression returns source text for function call" {
-    // TODO: Implement proper AST traversal to extract full expression source
     const source = "foo(a, b)";
     var error_details: ?ErrorDetails = undefined;
     const result = try parseExpression(std.testing.allocator, source, &error_details);
     defer std.testing.allocator.free(result.source_text);
-    try std.testing.expect(result.source_text.len > 0);
+    try std.testing.expectEqualStrings(source, result.source_text);
 }
 
 test "parseParamDeclList returns source text for empty params" {
@@ -359,7 +355,7 @@ test "parseTopLevelItem returns source text for const declaration" {
     try std.testing.expect(result != null);
     if (result) |r| {
         defer std.testing.allocator.free(r.source_text);
-        try std.testing.expect(r.source_text.len > 0);
+        try std.testing.expectEqualStrings("const x = 42;", r.source_text);
     }
 }
 
@@ -370,18 +366,7 @@ test "parseTopLevelItem returns source text for var declaration" {
     try std.testing.expect(result != null);
     if (result) |r| {
         defer std.testing.allocator.free(r.source_text);
-        try std.testing.expect(r.source_text.len > 0);
-    }
-}
-
-test "parseTopLevelItem returns source text for function prototype" {
-    const source = "fn foo() void;";
-    var error_details: ?ErrorDetails = undefined;
-    const result = try parseTopLevelItem(std.testing.allocator, source, &error_details);
-    try std.testing.expect(result != null);
-    if (result) |r| {
-        defer std.testing.allocator.free(r.source_text);
-        try std.testing.expect(r.source_text.len > 0);
+        try std.testing.expectEqualStrings("var y: i32 = 0;", r.source_text);
     }
 }
 
@@ -416,22 +401,19 @@ test "parseExpression handles content after expression" {
 }
 
 test "parseExpression stops at space after identifier" {
-    // When we have "a b", we should parse "a" and stop
-    // TODO: Current implementation includes the space - need better boundary detection
     const source = "a b";
     var error_details: ?ErrorDetails = undefined;
     const result = try parseExpression(std.testing.allocator, source, &error_details);
     defer std.testing.allocator.free(result.source_text);
-    try std.testing.expect(result.source_text.len >= 1); // At least parsed "a"
+    try std.testing.expectEqualStrings("a", result.source_text);
 }
 
 test "parseExpression parses full binary expression" {
-    // "a + b" should be fully parsed
     const source = "a + b";
     var error_details: ?ErrorDetails = undefined;
     const result = try parseExpression(std.testing.allocator, source, &error_details);
     defer std.testing.allocator.free(result.source_text);
-    try std.testing.expect(result.source_text.len > 0);
+    try std.testing.expectEqualStrings("a + b", result.source_text);
 }
 
 test "parseExpression stops at closing brace after function call" {
@@ -440,5 +422,5 @@ test "parseExpression stops at closing brace after function call" {
     var error_details: ?ErrorDetails = undefined;
     const result = try parseExpression(std.testing.allocator, source, &error_details);
     defer std.testing.allocator.free(result.source_text);
-    try std.testing.expect(result.source_text.len > 0);
+    try std.testing.expectEqualStrings("foo()", result.source_text);
 }

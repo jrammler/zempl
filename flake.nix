@@ -1,25 +1,29 @@
 {
-    inputs = {
-        nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-        flake-utils.url = "github:numtide/flake-utils";
-        zig-overlay = {
-            url = "github:mitchellh/zig-overlay";
-            inputs.nixpkgs.follows = "nixpkgs";
-        };
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    openspec = {
+      url = "github:Fission-AI/OpenSpec";
+      inputs.nixpkgs.follows = "nixpkgs";
     };
+  };
 
-    outputs = { self, nixpkgs, flake-utils, zig-overlay }:
-        flake-utils.lib.eachDefaultSystem (system:
-            let
-                pkgs = nixpkgs.legacyPackages.${system};
-            in
-            {
-                devShells.default = pkgs.mkShell {
-                    buildInputs = with pkgs; [
-                        zig-overlay.packages.${system}."0.15.2"
-                        zls_0_15
-                    ];
-                };
-            }
-        );
+  outputs =
+    {
+      self,
+      nixpkgs,
+      openspec,
+    }:
+    let
+      system = "x86_64-linux";
+      pkgs = nixpkgs.legacyPackages.${system};
+    in
+    {
+      devShells.${system}.default = pkgs.mkShell {
+        buildInputs = with pkgs; [
+          zig_0_15
+          zls_0_15
+          openspec.packages.${system}.default
+        ];
+      };
+    };
 }

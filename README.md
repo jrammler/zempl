@@ -220,10 +220,24 @@ HTML attributes with static values:
 </div>
 ```
 
-Dynamic attributes use `{value}` syntax:
+Dynamic attributes use `{expr}` interpolation within quoted strings:
 
 ```zig
-<a href={url}>Click here</a>
+<a href="/items/{item.id}">Open item</a>
+<div class="btn {type} {size}">Click</div>
+```
+
+Boolean attributes (no `=` sign):
+
+```zig
+<input disabled>
+<button hidden>Submit</button>
+```
+
+Dynamic boolean attributes use a single expression — rendered as a bare attribute when truthy, omitted when falsy:
+
+```zig
+<input disabled="{isDisabled}">
 ```
 
 Escape `@` in text with `@@`:

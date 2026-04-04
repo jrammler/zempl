@@ -23,7 +23,7 @@ pub const TokenType = enum {
 
     // Content tokens
     identifier,
-    string,
+    quote, // " - string delimiter
 
     // Zempl-specific keywords and symbols
     at_lbrace, // @{ - code block start
@@ -77,11 +77,6 @@ pub const Lexer = struct {
             .row = 1,
             .row_start = 0,
         };
-    }
-
-    /// Get current position in source
-    pub fn getPosition(self: Lexer) usize {
-        return self.index;
     }
 
     /// Get current location (line and column)
@@ -184,24 +179,6 @@ pub const Lexer = struct {
         }
     }
 
-    /// Scan a string literal
-    fn scanString(self: *Lexer) Token {
-        const location = self.getLocation();
-        const start = self.index;
-
-        // Consume first character (already validated as identifier start)
-        _ = self.advance();
-
-        // Consume rest of identifier
-        while (self.advance()) |ch| {
-            if (ch == '"')
-                break;
-        }
-
-        const text = self.source[start..self.index];
-        return Token.init(.string, location, text);
-    }
-
     /// Get next token (general purpose - for tags, attributes, etc.)
     pub fn next(self: *Lexer) Token {
         self.skipWhitespace();
@@ -301,7 +278,8 @@ pub const Lexer = struct {
 
         // Check for "
         if (c == '"') {
-            return self.scanString();
+            _ = self.advance();
+            return Token.init(.quote, location, "\"");
         }
 
         // Identifier
@@ -329,9 +307,9 @@ pub const Lexer = struct {
 // Tests
 test "Lexer initialization" {
     const source = "hello";
-    var lexer = Lexer.init(source, "test.zempl");
+    const lexer = Lexer.init(source, "test.zempl");
 
-    try std.testing.expectEqual(@as(usize, 0), lexer.getPosition());
+    try std.testing.expectEqual(@as(usize, 0), lexer.index);
 }
 
 test "EOF token" {
@@ -522,3 +500,19 @@ test "Attribute with dash" {
     try std.testing.expectEqualStrings("data-value", token.text);
 }
 
+test "Quote token" {
+    const source = "\"hello\"";
+    var lexer = Lexer.init(source, "test.zempl");
+
+    var token = lexer.next();
+    try std.testing.expectEqual(TokenType.quote, token.token_type);
+    try std.testing.expectEqualStrings("\"", token.text);
+
+    token = lexer.next();
+    try std.testing.expectEqual(TokenType.identifier, token.token_type);
+    try std.testing.expectEqualStrings("hello", token.text);
+
+    token = lexer.next();
+    try std.testing.expectEqual(TokenType.quote, token.token_type);
+    try std.testing.expectEqualStrings("\"", token.text);
+}

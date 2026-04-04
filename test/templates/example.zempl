@@ -19,10 +19,11 @@ zempl Link(href: []const u8, userId: u32) {
         var buf: [100]u8 = undefined;
         const url = try std.fmt.bufPrint(&buf, "/{s}/{d}", .{ href, userId });
     }
-    <a href={url}>Click here</a>
+    <a href="{url}">Click here</a>
+    <a href="/{href}/{userId}">Or here</a>
 }
 
-pub zempl Page(name: []const u8) {
+pub zempl Page(name: []const u8, showDisabled: bool) {
     <!DOCTYPE html>
     <html>
         <head>
@@ -37,6 +38,8 @@ pub zempl Page(name: []const u8) {
             <div>
                 <span>Send feedback to <a href="mailto:info@example.com">info@@example.com</a></span>
             </div>
+            <input disabled>
+            <input disabled="{showDisabled}">
         </body>
     </html>
 }

@@ -6,6 +6,7 @@ const ZemplImport = @import("ast.zig").ZemplImport;
 const HtmlNode = @import("ast.zig").HtmlNode;
 const HtmlElement = @import("ast.zig").HtmlElement;
 const HtmlAttribute = @import("ast.zig").HtmlAttribute;
+const AttributeValueSegment = @import("ast.zig").AttributeValueSegment;
 const ZemplArg = @import("ast.zig").ZemplArg;
 const Lexer = @import("lexer.zig").Lexer;
 const Token = @import("lexer.zig").Token;
@@ -110,10 +111,22 @@ pub const Parser = struct {
             return null;
         }
 
-        const path_token = lexer.next();
-        if (path_token.token_type != .string) {
+        const open_quote = lexer.next();
+        if (open_quote.token_type != .quote) {
             return null;
         }
+
+        const start_index = lexer.index;
+        var end_index = start_index;
+        while (true) {
+            const tok = lexer.next();
+            end_index = tok.location.index;
+            if (tok.token_type == .quote) break;
+            if (tok.token_type == .eof) return null;
+        }
+
+        const path = try self.allocator.dupe(u8, lexer.source[start_index..end_index]);
+        errdefer self.allocator.free(path);
 
         const rparen_token = lexer.next();
         if (rparen_token.token_type != .rparen) {
@@ -140,12 +153,6 @@ pub const Parser = struct {
         const const_name = try self.allocator.dupe(u8, name_token.text);
         errdefer self.allocator.free(const_name);
 
-        const path_text = path_token.text;
-        const path = if (path_text.len >= 2 and path_text[0] == '"' and path_text[path_text.len - 1] == '"')
-            try self.allocator.dupe(u8, path_text[1 .. path_text.len - 1])
-        else
-            try self.allocator.dupe(u8, path_text);
-
         self.lexer.* = lexer;
         return ZemplImport{
             .const_name = const_name,
@@ -156,7 +163,7 @@ pub const Parser = struct {
     }
 
     fn parseTopLevelItem(self: *Parser) error{ ParseError, OutOfMemory }!?[]const u8 {
-        const start_pos = self.lexer.getPosition();
+        const start_pos = self.lexer.index;
         const source_slice = self.lexer.source[start_pos..];
 
         const parse_result = try zig_parse.parseTopLevelItem(self.allocator, source_slice, &self.error_details);
@@ -169,7 +176,7 @@ pub const Parser = struct {
     }
 
     fn parseExpression(self: *Parser) error{ ParseError, OutOfMemory }![]const u8 {
-        const start_pos = self.lexer.getPosition();
+        const start_pos = self.lexer.index;
         const source_slice = self.lexer.source[start_pos..];
 
         const parse_result = try zig_parse.parseExpression(self.allocator, source_slice, &self.error_details);
@@ -179,7 +186,7 @@ pub const Parser = struct {
     }
 
     fn parseParamDeclList(self: *Parser) error{ ParseError, OutOfMemory }![]const u8 {
-        const start_pos = self.lexer.getPosition();
+        const start_pos = self.lexer.index;
         const source_slice = self.lexer.source[start_pos..];
 
         const parse_result = try zig_parse.parseParamDeclList(self.allocator, source_slice, &self.error_details);
@@ -418,34 +425,83 @@ pub const Parser = struct {
         const name = try self.allocator.dupe(u8, name_token.text);
         errdefer self.allocator.free(name);
 
-        var value: []const u8 = "";
+        var segments = std.ArrayList(AttributeValueSegment).empty;
+        errdefer {
+            for (segments.items) |seg| {
+                seg.deinit(self.allocator);
+            }
+            segments.deinit(self.allocator);
+        }
 
         if (self.lexer.peek().token_type == .equal) {
             _ = self.lexer.next();
 
             const next_token = self.lexer.peek();
-            if (next_token.token_type == .lbrace) {
+            if (next_token.token_type == .quote) {
                 _ = self.lexer.next();
-                value = try self.parseExpression();
-                if (self.lexer.next().token_type != .rbrace) {
-                    self.setError(self.lexer.peek().location, "expected '}'");
+                try self.parseAttributeValueSegments(&segments);
+                if (self.lexer.next().token_type != .quote) {
+                    self.setError(self.lexer.peek().location, "expected closing '\"'");
                     return error.ParseError;
                 }
             } else {
-                if (next_token.token_type != .string) {
-                    self.setError(next_token.location, "expected string");
-                    return error.ParseError;
-                }
-                value = try self.allocator.dupe(u8, next_token.text);
+                self.setError(next_token.location, "expected '\"' for attribute value");
+                return error.ParseError;
             }
-        } else {
-            value = try self.allocator.dupe(u8, "true");
         }
 
         return HtmlAttribute{
             .name = name,
-            .value = value,
+            .value = try segments.toOwnedSlice(self.allocator),
         };
+    }
+
+    /// Collect attribute value segments between opening and closing quotes.
+    /// Treats `{` as expression start, everything else as literal text.
+    fn parseAttributeValueSegments(self: *Parser, segments: *std.ArrayList(AttributeValueSegment)) error{ ParseError, OutOfMemory }!void {
+        var start_index = self.lexer.index;
+        while (true) {
+            const token = self.lexer.peek();
+            if (token.token_type == .eof) {
+                self.setError(token.location, "unclosed attribute value");
+                return error.ParseError;
+            }
+            if (token.token_type == .rbrace) {
+                self.setError(token.location, "unexpected '}' in attribute value");
+                return error.ParseError;
+            }
+            if (token.token_type == .quote) break;
+
+            if (token.token_type == .lbrace) {
+                // Flush accumulated literal
+                if (token.location.index > start_index) {
+                    const text = try self.allocator.dupe(u8, self.lexer.source[start_index..token.location.index]);
+                    try segments.append(self.allocator, .{ .literal = text });
+                }
+
+                // Parse expression
+                _ = self.lexer.next();
+                const expr = try self.parseExpression();
+                errdefer self.allocator.free(expr);
+
+                if (self.lexer.next().token_type != .rbrace) {
+                    self.setError(self.lexer.peek().location, "expected '}'");
+                    return error.ParseError;
+                }
+
+                try segments.append(self.allocator, .{ .expression = expr });
+
+                start_index = self.lexer.index;
+            } else {
+                _ = self.lexer.next();
+            }
+        }
+
+        // Flush final literal
+        if (self.lexer.index > start_index) {
+            const text = try self.allocator.dupe(u8, self.lexer.source[start_index..self.lexer.index]);
+            try segments.append(self.allocator, .{ .literal = text });
+        }
     }
 
     /// Parse text content using nextContent
@@ -456,7 +512,7 @@ pub const Parser = struct {
         var content = std.ArrayList(u8).empty;
         errdefer content.deinit(self.allocator);
 
-        var text_start = self.lexer.getPosition();
+        var text_start = self.lexer.index;
 
         while (true) {
             const token = self.lexer.peek();
@@ -483,7 +539,7 @@ pub const Parser = struct {
                 try content.appendSlice(self.allocator, self.lexer.source[text_start..end_loc.index]);
                 _ = self.lexer.next();
                 try content.append(self.allocator, '@');
-                text_start = self.lexer.getPosition();
+                text_start = self.lexer.index;
                 continue;
             }
 
@@ -692,7 +748,7 @@ pub const Parser = struct {
     fn parseCodeBlock(self: *Parser) error{ ParseError, OutOfMemory }!HtmlNode {
         const at_lbrace_token = self.lexer.next();
 
-        const start_pos = self.lexer.getPosition();
+        const start_pos = self.lexer.index;
 
         var brace_depth: i32 = 1;
         while (brace_depth > 0) {
@@ -708,7 +764,7 @@ pub const Parser = struct {
             }
         }
 
-        const end_pos = self.lexer.getPosition() - 1;
+        const end_pos = self.lexer.index - 1;
         const statements = self.lexer.source[start_pos..end_pos];
 
         return HtmlNode{ .code_block = .{
@@ -975,7 +1031,7 @@ test "parser handles void elements" {
 }
 
 test "parser handles HTML attributes" {
-    const source = "zempl Hello() { <div class=\"test\" id={main}>Content</div> }";
+    const source = "zempl Hello() { <div class=\"test\" id=\"{main}\">Content</div> }";
     var lexer = Lexer.init(source, "test.zempl");
 
     var parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
@@ -983,7 +1039,6 @@ test "parser handles HTML attributes" {
     defer file.deinit(std.testing.allocator);
 
     try std.testing.expectEqual(@as(usize, 1), file.items.len);
-    // Attributes: class, test (value of class), id, main (value of id)
     try std.testing.expect(file.items[0].component.body[0].element.attributes.len >= 2);
     try std.testing.expectEqualStrings("class", file.items[0].component.body[0].element.attributes[0].name);
     try std.testing.expectEqualStrings("id", file.items[0].component.body[0].element.attributes[1].name);
@@ -1340,17 +1395,67 @@ test "parseElementStart handles element with boolean attribute" {
     try std.testing.expectEqualStrings("input", file.items[0].component.body[0].element.tag_name);
     try std.testing.expect(file.items[0].component.body[0].element.attributes.len == 1);
     try std.testing.expectEqualStrings("disabled", file.items[0].component.body[0].element.attributes[0].name);
-    try std.testing.expectEqualStrings("true", file.items[0].component.body[0].element.attributes[0].value);
+    try std.testing.expect(file.items[0].component.body[0].element.attributes[0].value.len == 0);
 }
 
-test "parseAttribute handles attribute with expression value" {
+test "parseAttribute rejects bare expression value" {
     const source = "zempl Test() { <div class={classes}>Content</div> }";
+    var lexer = Lexer.init(source, "test.zempl");
+    var parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
+    const result = parser.parseFile();
+    try std.testing.expectError(error.ParseError, result);
+}
+
+test "parseAttribute handles interpolated expression value" {
+    const source = "zempl Test() { <div class=\"{classes}\">Content</div> }";
     var lexer = Lexer.init(source, "test.zempl");
     var parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
     const file = try parser.parseFile();
     defer file.deinit(std.testing.allocator);
 
     try std.testing.expect(file.items[0].component.body[0] == .element);
+    const attrs = file.items[0].component.body[0].element.attributes;
+    try std.testing.expect(attrs.len == 1);
+    try std.testing.expectEqualStrings("class", attrs[0].name);
+    try std.testing.expect(attrs[0].value.len == 1);
+    try std.testing.expect(attrs[0].value[0] == .expression);
+    try std.testing.expectEqualStrings("classes", attrs[0].value[0].expression);
+}
+
+test "parseAttribute handles mixed literal and expression segments" {
+    const source = "zempl Test() { <a href=\"/items/{id}\">Link</a> }";
+    var lexer = Lexer.init(source, "test.zempl");
+    var parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
+    const file = try parser.parseFile();
+    defer file.deinit(std.testing.allocator);
+
+    const attrs = file.items[0].component.body[0].element.attributes;
+    try std.testing.expect(attrs.len == 1);
+    try std.testing.expectEqualStrings("href", attrs[0].name);
+    try std.testing.expect(attrs[0].value.len == 2);
+    try std.testing.expect(attrs[0].value[0] == .literal);
+    try std.testing.expectEqualStrings("/items/", attrs[0].value[0].literal);
+    try std.testing.expect(attrs[0].value[1] == .expression);
+    try std.testing.expectEqualStrings("id", attrs[0].value[1].expression);
+}
+
+test "parseAttribute handles multiple interpolations" {
+    const source = "zempl Test() { <a href=\"/users/{uid}/items/{iid}\">Link</a> }";
+    var lexer = Lexer.init(source, "test.zempl");
+    var parser = Parser.init(&lexer, std.testing.allocator, "test.zempl");
+    const file = try parser.parseFile();
+    defer file.deinit(std.testing.allocator);
+
+    const attrs = file.items[0].component.body[0].element.attributes;
+    try std.testing.expect(attrs[0].value.len == 4);
+    try std.testing.expect(attrs[0].value[0] == .literal);
+    try std.testing.expectEqualStrings("/users/", attrs[0].value[0].literal);
+    try std.testing.expect(attrs[0].value[1] == .expression);
+    try std.testing.expectEqualStrings("uid", attrs[0].value[1].expression);
+    try std.testing.expect(attrs[0].value[2] == .literal);
+    try std.testing.expectEqualStrings("/items/", attrs[0].value[2].literal);
+    try std.testing.expect(attrs[0].value[3] == .expression);
+    try std.testing.expectEqualStrings("iid", attrs[0].value[3].expression);
 }
 
 test "parseZemplComponent fails without zempl keyword" {

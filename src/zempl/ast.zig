@@ -20,13 +20,29 @@ pub const HtmlElement = struct {
     }
 };
 
+/// A segment within an attribute value — either a literal string or a Zig expression
+pub const AttributeValueSegment = union(enum) {
+    literal: []const u8,
+    expression: []const u8,
+
+    pub fn deinit(self: AttributeValueSegment, allocator: std.mem.Allocator) void {
+        switch (self) {
+            .literal => |text| allocator.free(text),
+            .expression => |expr| allocator.free(expr),
+        }
+    }
+};
+
 /// HTML attribute (name=value)
 pub const HtmlAttribute = struct {
     name: []const u8,
-    value: []const u8,
+    value: []AttributeValueSegment,
 
     pub fn deinit(self: HtmlAttribute, allocator: std.mem.Allocator) void {
         allocator.free(self.name);
+        for (self.value) |segment| {
+            segment.deinit(allocator);
+        }
         allocator.free(self.value);
     }
 };
